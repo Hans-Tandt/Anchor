@@ -1,0 +1,53 @@
+# ---- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+
+# ---- Virtual environments --------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Type checkers / linters / test caches ---------------------------------
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- PyInstaller / build artifacts -----------------------------------------
+build/
+dist/
+*.spec
+
+# ---- Anchor runtime output -------------------------------------------------
+# App creates these on first run; nothing runtime belongs in the repo.
+logs/
+*.log
+*.bkp.tmp
+
+# ---- OS / editor cruft -----------------------------------------------------
+Thumbs.db
+.DS_Store
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# ---- IDE settings ----------------------------------------------------------
+.vscode/
+.idea/
+
+# ---- Claude Code / Spec Kit local overrides --------------------------------
+# Local permission history — regenerates per user, never publish.
+.claude/settings.local.json
+
+# ---- Personal / backups (belt-and-braces) ----------------------------------
+*.bak
+*.bak-*/
+_smoke_*.py
+NOTES/

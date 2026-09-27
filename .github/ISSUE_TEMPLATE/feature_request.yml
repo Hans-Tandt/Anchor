@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an improvement or a new capability for Anchor.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an idea. Short, concrete proposals are easier to act on.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Anchor doesn't help with today?
+      placeholder: When I try to X, I end up doing Y manually because Anchor doesn't Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposed solution
+      description: A concrete idea of what a solution could look like — a new setting, a new button, a new destination type, etc.
+      placeholder: Add a checkbox "…" in Options that …
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other ways of solving the problem, or workarounds you already use.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, examples from other tools, links to related issues.

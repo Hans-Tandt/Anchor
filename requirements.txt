@@ -1,0 +1,7 @@
+# Required
+PySide6>=6.5
+
+# Optional — only needed if you use SFTP or WebDAV destinations
+paramiko>=3.0          # for SFTP destinations (QNAP remote etc.)
+webdavclient3>=3.14    # for WebDAV destinations
+keyring>=24.0          # so remote passwords go to Windows Credential Manager
