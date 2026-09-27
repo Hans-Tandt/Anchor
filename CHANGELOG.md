@@ -5,6 +5,19 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-09-27
+
+First packaged Windows build. Users who don't want to install Python can now grab a runnable bundle directly.
+
+### Added
+- `build.bat` and `Anchor.spec` — one-click PyInstaller build producing `dist\Anchor\Anchor.exe` with `_internal\` beside it. Bundles TechEase assets, the app icon, and hidden imports for lazy-loaded SFTP/WebDAV/keyring modules.
+- `anchor/__main__.py` now dispatches to the CLI when invoked with `--cli`, so scheduled tasks can run the frozen exe.
+- v1.2.0 release ships `Anchor_V1.2.0_Windows.zip` — full runnable bundle with no Python required on the target machine.
+
+### Changed
+- `anchor/scheduler.py` detects `sys.frozen` and builds the schtasks command against `Anchor.exe --cli` in a packaged build, `pythonw -m anchor.cli` in a source install.
+- Log location: `%APPDATA%\Anchor\logs\` when running as the frozen exe (the install folder may be read-only); still `<project>/logs/` when running from source.
+
 ## [1.1.0] — 2026-05-23
 
 Hardening pass on top of the initial release: seven data-safety fixes,

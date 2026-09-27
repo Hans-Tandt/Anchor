@@ -75,12 +75,28 @@ That's it. Create a profile from the GUI, add sources and a destination, and cli
 
 ## Build the .exe
 
-Not yet packaged. When it is, it will use PyInstaller + Inno Setup and land as `Anchor_V<version>_Windows.zip` on the Releases page. Rough recipe:
+Anchor ships a `build.bat` that produces a standalone Windows build via PyInstaller. From the project root:
 
 ```bat
-python -m pip install pyinstaller
-pyinstaller --noconfirm --windowed --name Anchor --icon assets\icon.ico anchor\__main__.py
+build.bat
 ```
+
+The first run auto-installs PyInstaller (~50 MB) if it isn't present. Subsequent builds skip that step.
+
+Output layout:
+
+```
+dist\Anchor\
+├── Anchor.exe          <-- launch this
+└── _internal\          <-- Qt libraries, Python runtime, bundled data
+                            (must stay next to Anchor.exe)
+```
+
+To share the build, zip the whole `dist\Anchor\` folder. The exe on its own won't run — it needs `_internal\` beside it.
+
+The bundled exe also acts as the CLI dispatcher for scheduled backups: `Anchor.exe --cli --profile <id> --silent`. Anchor's scheduler auto-detects the frozen build and writes tasks against the exe instead of `python -m anchor.cli`.
+
+A future release will wrap this into a signed Inno Setup installer. For now, the zip works fine on any Windows 10/11 machine without Python installed.
 
 ## Project structure
 

@@ -37,27 +37,29 @@ def _task_name(profile_id: str) -> str:
     return f"{TASK_PREFIX}{profile_id}"
 
 
-def _python_runner() -> str:
-    """Best-effort path to pythonw.exe for hidden execution."""
+def _invocation_prefix() -> str:
+    """Return the shell-quoted command that runs Anchor's CLI on this system.
+
+    * Frozen (PyInstaller build): the exe IS the CLI entry point when invoked
+      with `--cli` (see `anchor/__main__.py`), so we just wrap `sys.executable`.
+    * Source install: use `pythonw.exe -m anchor.cli --cwd <project-root>`
+      so scheduled runs don't flash a console window.
+    """
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" --cli'
     exe = sys.executable
     if exe.lower().endswith("python.exe"):
         pw = exe[:-len("python.exe")] + "pythonw.exe"
         if os.path.exists(pw):
-            return pw
-    return exe
-
-
-def _project_root() -> str:
-    """Folder that contains the `anchor` package — used as -m working dir."""
+            exe = pw
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.dirname(here)
+    root = os.path.dirname(here)
+    return f'"{exe}" -m anchor.cli --cwd "{root}"'
 
 
 def task_command(profile_id: str) -> str:
-    py = _python_runner()
-    root = _project_root()
-    # /D sets working dir for schtasks
-    return f'"{py}" -m anchor.cli --profile {profile_id} --silent --cwd "{root}"'
+    """Return the exact command a scheduled task should run for `profile_id`."""
+    return f"{_invocation_prefix()} --profile {profile_id} --silent"
 
 
 def create_or_update(profile_id: str, spec: ScheduleSpec) -> Optional[str]:
@@ -66,26 +68,18 @@ def create_or_update(profile_id: str, spec: ScheduleSpec) -> Optional[str]:
         return "Scheduling is only available on Windows."
 
     name = _task_name(profile_id)
-    py = _python_runner()
-    root = _project_root()
+    tr = task_command(profile_id)
 
     cmd = [
         "schtasks", "/Create", "/F",
         "/TN", name,
-        "/TR", f'"{py}" -m anchor.cli --profile {profile_id} --silent',
+        "/TR", tr,
         "/SC", spec.frequency,
     ]
     if spec.frequency in ("DAILY", "WEEKLY"):
         cmd += ["/ST", spec.start_time or "03:00"]
     if spec.frequency == "WEEKLY" and spec.days:
         cmd += ["/D", spec.days]
-
-    # Working directory hint via environment is impossible with schtasks,
-    # so we point the task's "Start in" to project root via a powershell pre-cmd.
-    # Simpler: we pass --cwd inside the command itself (handled in cli.py).
-    cmd[cmd.index("/TR") + 1] = (
-        f'"{py}" -m anchor.cli --profile {profile_id} --silent --cwd "{root}"'
-    )
 
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)

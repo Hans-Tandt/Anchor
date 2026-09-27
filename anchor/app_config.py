@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
@@ -23,9 +24,17 @@ def _project_root() -> Path:
 
 
 def _writable_logs_dir() -> Path:
-    """Prefer `<project>/logs/` so users can find their logs next to the app.
-    Fall back to %APPDATA%\\Anchor\\logs only if the project dir is read-only
-    (e.g., the app got installed under Program Files)."""
+    """Where log files live.
+
+    * PyInstaller build: always `%APPDATA%\\Anchor\\logs\\` — the install
+      folder may be under Program Files (read-only for standard users) and
+      shouldn't hold per-user data anyway.
+    * Source install: prefer `<project>/logs/` for discoverability, fall
+      back to `%APPDATA%\\Anchor\\logs\\` only when the project folder
+      isn't writable.
+    """
+    if getattr(sys, "frozen", False):
+        return _appdata_root() / "logs"
     candidate = _project_root() / "logs"
     try:
         candidate.mkdir(parents=True, exist_ok=True)
