@@ -54,6 +54,11 @@ Desktop.ini
 # must never reach the public repo.
 CLAUDE.md
 MEMORY.md
+# Local copies of the session-guard helper scripts (health_check.py,
+# add_session_note.py). Identical to the skill's own copies — nothing
+# project-specific, just placed here so the skill can run them from
+# where the data is.
+_tools/
 
 # ---- Personal / backups (belt-and-braces) ----------------------------------
 *.bak
