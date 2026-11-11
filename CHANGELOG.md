@@ -5,6 +5,24 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] — 2026-11-11
+
+Feedback-driven polish of the 1.4.0 progress UI, plus a theme fix.
+
+### Added
+- **Sources / Destinations frames are now colour-coded by availability** — green border when every entry exists, red border that blinks (500 ms) when any entry is missing (disconnected USB drive, unmounted share, renamed source). The 5-second destination-freshness poll re-evaluates on each tick, so plugging a drive in or out flips the frame live with no profile re-select.
+- **Legend under the scan donut** with live counts: a gold `●  to copy  N,NNN` row and a muted `●  unchanged  N,NNN` row so there is no ambiguity about what the percentage measures. Counts use thousands separators.
+- **Phase tooltips** on Scan / Copy / Verify rows explaining what each phase actually does (Scan vs Verify are easy to confuse — Scan looks at the source, Verify looks at the destination).
+
+### Changed
+- **Cancel button** now uses the `#danger` style (red border and text) so it's obviously the stop action during a live run, instead of blending in with the other disabled secondary buttons.
+- **Disabled primary and danger buttons** actually look disabled now (muted background, dashed border). Previously "Run backup now" kept its gold background while disabled during a run.
+- **Scan donut is hidden until scan-done** — its live percentage during classify wobbled wildly as the first few files landed in each bucket, which was more confusing than informative. It now snaps to the resolved ratio at scan-done and stays visible through Copy and Verify.
+- **Scan donut is also hidden** in idle, at app launch, and during a standalone Verify run — anywhere it has nothing meaningful to show.
+
+### Fixed
+- **Log toggle button** no longer renders as a light-grey Fusion default on the dark theme. Added a `QToolButton` rule to the theme so it matches the other header buttons and themes cleanly across a Toggle-theme cycle.
+
 ## [1.4.0] — 2026-11-11
 
 New exclusions UI and new progress UI. Also fixes `run.bat` and hardens `build.bat` so the two script-level traps that caused recent confusion can't bite again silently.
