@@ -110,6 +110,26 @@ def _qss(c: dict) -> str:
         border: 1px dashed {c['border']};
     }}
 
+    /* QToolButton — used for the collapsible Log header toggle. Without a
+       rule it falls back to Fusion's default light-grey, which looks jarring
+       on the dark panel background (and doesn't theme-switch cleanly). */
+    QToolButton {{
+        background: transparent;
+        color: {c['text']};
+        border: 1px solid transparent;
+        border-radius: 4px;
+        padding: 4px 8px;
+    }}
+    QToolButton:hover {{
+        background: {c['panel_alt']};
+        border: 1px solid {c['border']};
+    }}
+    QToolButton:checked {{
+        background: {c['panel_alt']};
+        color: {c['text']};
+    }}
+    QToolButton:disabled {{ color: {c['text_muted']}; }}
+
     QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {{
         background: {c['input_bg']};
         border: 1px solid {c['border']};
