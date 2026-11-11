@@ -58,10 +58,16 @@ class BackupProfile:
     sources: List[str] = field(default_factory=list)
     destinations: List[DestinationConfig] = field(default_factory=list)
 
-    # Exclusion patterns (glob-style, applied to relative path)
+    # Exclusion patterns (glob-style, applied to relative path).
+    #
+    # IMPORTANT: `.git` is deliberately NOT in the defaults. Excluding it
+    # would drop the entire version history (commits, branches, tags) of
+    # every repository under the source — a real data-loss trap. If a user
+    # ticks it anyway, the Exclusions tab shows a warning and the engine
+    # logs a WARN line at the start of each run.
     exclude_globs: List[str] = field(default_factory=lambda: [
         "*.tmp", "*.log", "~$*", "Thumbs.db", ".DS_Store",
-        "node_modules", "__pycache__", ".venv", ".git",
+        "node_modules", "__pycache__", ".venv",
     ])
     exclude_dirs: List[str] = field(default_factory=list)  # absolute or basename
 

@@ -5,6 +5,20 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-11-11
+
+Data-safety fix: Git history was being silently skipped.
+
+### Fixed
+- **`.git` is no longer in the default exclusion list** for new profiles. Previous defaults excluded `.git`, so Anchor was skipping the entire version-control history (commits, branches, tags) of every repository under the sources — a real data-loss trap. Several local repos had histories that never reached the destination.
+- Existing profiles that already have `.git` in their saved exclusion list are left alone (not silently rewritten), but:
+  - The Exclusions tab now shows a red ⚠ warning when any version-control folder (`.git`, `.svn`, `.hg`, `.bzr`) is listed, explaining what will be lost.
+  - The engine logs a WARN line at the start of every run with `.git` excluded.
+- Open each existing profile → Edit → Exclusions → remove the `.git` line to protect its Git history going forward.
+
+### Changed
+- Default `exclude_globs` reduced to: `*.tmp`, `*.log`, `~$*`, `Thumbs.db`, `.DS_Store`, `node_modules`, `__pycache__`, `.venv`.
+
 ## [1.2.0] — 2026-09-27
 
 First packaged Windows build. Users who don't want to install Python can now grab a runnable bundle directly.

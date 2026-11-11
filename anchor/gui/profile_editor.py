@@ -257,6 +257,38 @@ class ProfileEditor(QtWidgets.QDialog):
         self.excludes_edit = QtWidgets.QPlainTextEdit()
         self.excludes_edit.setPlainText("\n".join(self.profile.exclude_globs))
         el.addWidget(self.excludes_edit, 1)
+        # Red warning that lights up when `.git` is in the list — excluding
+        # Git history from a backup is almost never what the user actually
+        # wants (it drops every commit, branch and tag from the repos they
+        # back up). This is the GUI counterpart of the WARN line the engine
+        # also logs at run start.
+        self.excludes_warn = QtWidgets.QLabel()
+        self.excludes_warn.setWordWrap(True)
+        self.excludes_warn.setStyleSheet(
+            "QLabel { background-color: #4a1a1a; color: #ffd0d0; "
+            "border: 1px solid #a04040; padding: 8px; border-radius: 4px; }"
+        )
+        self.excludes_warn.setVisible(False)
+        el.addWidget(self.excludes_warn)
+
+        def _refresh_excludes_warning() -> None:
+            lines = [l.strip() for l in self.excludes_edit.toPlainText().splitlines()]
+            risky = {".git", ".svn", ".hg", ".bzr"}
+            found = sorted(set(lines) & risky)
+            if found:
+                self.excludes_warn.setText(
+                    "⚠  WARNING: " + ", ".join(found)
+                    + " is in the exclusion list. The version-control history "
+                    "(commits, branches, tags) of your repositories will NOT "
+                    "be backed up. Remove the line above if you want Anchor to "
+                    "protect your Git history."
+                )
+                self.excludes_warn.setVisible(True)
+            else:
+                self.excludes_warn.setVisible(False)
+        self.excludes_edit.textChanged.connect(_refresh_excludes_warning)
+        _refresh_excludes_warning()
+
         tabs.addTab(ex_w, "Exclusions")
 
         # --- Options tab ---

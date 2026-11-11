@@ -188,6 +188,20 @@ class BackupEngine:
                 errors=[msg], files_failed=1,
             )
 
+        # Loud warning if the user is excluding version-control metadata.
+        # Dropping `.git` from a backup silently throws away every commit,
+        # branch and tag of every repo under the sources — almost never what
+        # the user wants. The profile editor shows the same warning in red.
+        risky_vcs = {".git", ".svn", ".hg", ".bzr"} & set(self.profile.exclude_globs)
+        if risky_vcs:
+            log.warning(
+                "Profile '%s' excludes version-control metadata (%s). "
+                "Git history (commits, branches, tags) for repositories under "
+                "the sources will NOT be backed up. Remove these entries from "
+                "the Exclusions tab to protect your Git history.",
+                self.profile.name, ", ".join(sorted(risky_vcs)),
+            )
+
         # 1. Scan sources once (the scan is shared across destinations)
         rules = ExclusionRules(
             file_globs=list(self.profile.exclude_globs),
