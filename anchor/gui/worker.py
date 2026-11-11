@@ -22,12 +22,22 @@ class BackupWorker(QtCore.QThread):
         super().__init__(parent)
         self.profile = profile
         self._cancel = threading.Event()
+        # Set by the GUI when the user clicks the "Start copy" confirm button.
+        # Only observed by the engine when `profile.confirm_before_copy` is on;
+        # otherwise the engine ignores it and uses the time-based pause.
+        self._confirm = threading.Event()
 
     def request_cancel(self) -> None:
         self._cancel.set()
+        # Unblock the scan-done wait so cancel kills the run promptly.
+        self._confirm.set()
 
     def is_cancelling(self) -> bool:
         return self._cancel.is_set()
+
+    def confirm_start_copy(self) -> None:
+        """Called from the GUI when the user clicks 'Start copy' after scan."""
+        self._confirm.set()
 
     def run(self) -> None:  # noqa: D401
         try:
@@ -35,6 +45,7 @@ class BackupWorker(QtCore.QThread):
                 self.profile,
                 on_event=self._on_progress,
                 cancel_event=self._cancel,
+                confirm_event=self._confirm,
             )
             result: BackupResult = engine.run()
             # Persist run summary on profile
@@ -75,13 +86,20 @@ class BackupGroupWorker(QtCore.QThread):
         super().__init__(parent)
         self.profiles = list(profiles)
         self._cancel = threading.Event()
+        # Shared confirm event, reset between profiles. Only profiles with
+        # `confirm_before_copy` set will actually use it.
+        self._confirm = threading.Event()
         self._log = logging.getLogger("anchor.group")
 
     def request_cancel(self) -> None:
         self._cancel.set()
+        self._confirm.set()
 
     def is_cancelling(self) -> bool:
         return self._cancel.is_set()
+
+    def confirm_start_copy(self) -> None:
+        self._confirm.set()
 
     def run(self) -> None:  # noqa: D401
         results: List[BackupResult] = []
@@ -89,6 +107,9 @@ class BackupGroupWorker(QtCore.QThread):
         for i, profile in enumerate(self.profiles, start=1):
             if self._cancel.is_set():
                 break
+            # Reset the confirm event for this profile — each profile that
+            # wants a confirm gets its own fresh wait.
+            self._confirm.clear()
             # A clear header in the GUI log so the user can tell where one
             # profile's output ends and the next begins.
             self._log.info(
@@ -99,6 +120,7 @@ class BackupGroupWorker(QtCore.QThread):
                     profile,
                     on_event=self._make_progress_emitter(i, total, profile.name),
                     cancel_event=self._cancel,
+                    confirm_event=self._confirm,
                 )
                 result = engine.run()
                 # Persist last-run summary on the profile

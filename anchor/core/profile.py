@@ -100,6 +100,12 @@ class BackupProfile:
     # said it copied but the bytes didn't actually land" scenarios (which
     # shouldn't happen, but verifying it gives the user peace of mind).
     verify_after_copy: bool = True
+    # Pause the engine at the end of the scan phase and wait for the user to
+    # click "Start copy" in the GUI. When False (default) the engine proceeds
+    # automatically after `scan_pause_seconds`. Useful for backups where the
+    # user wants to eyeball the "N files to copy" number before any write
+    # actually happens.
+    confirm_before_copy: bool = False
     follow_symlinks: bool = False
     preserve_metadata: bool = True     # copy2 (timestamps + perms) vs copy
 

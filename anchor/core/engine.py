@@ -128,10 +128,16 @@ class BackupEngine:
         cancel_event: Optional[threading.Event] = None,
         verify_with_hash: Optional[bool] = None,
         settings: Optional[AppSettings] = None,
+        confirm_event: Optional[threading.Event] = None,
     ):
         self.profile = profile
         self.on_event = on_event or (lambda p: None)
         self.cancel_event = cancel_event or threading.Event()
+        # User-confirmation gate between scan and copy. When
+        # `profile.confirm_before_copy` is on and this event is given, the
+        # engine waits at the scan-done phase until it's set (or cancel
+        # fires). Left as None, the time-based scan_pause_seconds is used.
+        self.confirm_event = confirm_event
         # Per-run override of the profile's hash-verify setting.
         self.verify_with_hash = (
             profile.verify_with_hash if verify_with_hash is None else verify_with_hash
@@ -399,23 +405,33 @@ class BackupEngine:
             result.files_skipped - self._adopted_count, adopted_part,
         )
 
-        # Hold the scan-complete summary on screen for a moment so the user
-        # can read it before the bar resets to 0 for the copy phase. The
-        # current `progress` already has the final scan counters; emitting a
-        # special "scan-done" phase lets the GUI render the summary line.
+        # Hold the scan-complete summary on screen so the user can read it
+        # before the bar resets to 0 for the copy phase. The current
+        # `progress` already has the final scan counters; emitting a special
+        # "scan-done" phase lets the GUI render the summary line and, when
+        # the profile asks for it, show a "Start copy" confirm button.
+        want_confirm = (
+            self.profile.confirm_before_copy and self.confirm_event is not None
+        )
         pause = max(0, int(getattr(self._settings, "scan_pause_seconds", 3)))
-        if pause > 0:
+        if want_confirm or pause > 0:
             with progress_lock:
                 progress.phase = "scan-done"
                 progress.files_to_copy = len(to_copy)
                 progress.bytes_to_copy = bytes_to_copy
                 progress.current_file = ""
             self._emit(progress, force=True)
-            # Sleep in small slices so Cancel still kills the run promptly.
-            slept = 0.0
-            while slept < pause and not self.cancel_event.is_set():
-                time.sleep(0.1)
-                slept += 0.1
+            if want_confirm:
+                # Wait indefinitely for the GUI to set confirm_event (or for
+                # cancel to fire). Sliced so Cancel kills the run promptly.
+                while not self.confirm_event.is_set() and not self.cancel_event.is_set():
+                    time.sleep(0.1)
+            else:
+                # Time-based pause (default). Also sliced for Cancel.
+                slept = 0.0
+                while slept < pause and not self.cancel_event.is_set():
+                    time.sleep(0.1)
+                    slept += 0.1
 
         # Phase 2 — COPYING. Reset per-phase counters; cumulative counters
         # (files_copied, files_skipped, files_failed, bytes_copied) keep their

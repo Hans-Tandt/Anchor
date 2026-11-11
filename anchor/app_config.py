@@ -75,6 +75,9 @@ class AppSettings:
     # can read the "X to copy, Y unchanged" summary before the bar resets and
     # the copy starts. 0 = no pause. The pause is interruptible by Cancel.
     scan_pause_seconds: int = 3
+    # Main-window log card collapsed state. Persists across sessions so the
+    # user doesn't have to re-collapse it every launch.
+    log_collapsed: bool = False
     # SFTP/WebDAV stored credentials are *per profile*, not here.
 
     @classmethod

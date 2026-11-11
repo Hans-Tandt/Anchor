@@ -474,6 +474,19 @@ class ProfileEditor(QtWidgets.QDialog):
             "reporting any that are missing or have the wrong size. Highly\n"
             "recommended — catches silent failures."
         )
+        # Confirm-before-copy: after the scan phase, the engine pauses and
+        # the GUI shows a "Start copy" button instead of auto-proceeding.
+        # Lets the user eyeball the "N files to copy" summary before any
+        # write happens.
+        self.confirm_copy = QtWidgets.QCheckBox(
+            "Wait for me to confirm before copying"
+        )
+        self.confirm_copy.setChecked(self.profile.confirm_before_copy)
+        self.confirm_copy.setToolTip(
+            "When scanning finishes, pause and wait for you to click\n"
+            "'Start copy' before anything is written to the destination.\n"
+            "Off (default): copy starts automatically after a short pause."
+        )
         self.flat_layout.setToolTip(
             "OFF (default): files go to <destination>/<source-label>/...\n"
             "ON: files go directly into <destination>/...\n\n"
@@ -487,6 +500,7 @@ class ProfileEditor(QtWidgets.QDialog):
         ol.addRow("Keep previous versions:", self.keep_versions)
         ol.addRow(self.flat_layout)
         ol.addRow(self.verify_after)
+        ol.addRow(self.confirm_copy)
         ol.addRow(self.preserve_meta)
         ol.addRow(self.follow_links)
         tabs.addTab(opt_w, "Options")
@@ -684,6 +698,7 @@ class ProfileEditor(QtWidgets.QDialog):
             return
         self.profile.flat_destination_layout = self.flat_layout.isChecked()
         self.profile.verify_after_copy = self.verify_after.isChecked()
+        self.profile.confirm_before_copy = self.confirm_copy.isChecked()
         self.profile.preserve_metadata = self.preserve_meta.isChecked()
         self.profile.follow_symlinks = self.follow_links.isChecked()
         self.accept()

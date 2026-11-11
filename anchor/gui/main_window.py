@@ -37,11 +37,23 @@ from .. import scheduler as sched
 
 from .issues_dialog import IssuesDialog
 from .profile_editor import ProfileEditor
+from .progress_widgets import PhaseStripWidget, ScanDonutWidget, VerifyBanner
 from .restore_dialog import RestoreDialog
 from .schedule_dialog import ScheduleDialog
 from .settings_dialog import SettingsDialog
 from .theme import apply_theme
 from .worker import BackupGroupWorker, BackupWorker, VerifyWorker
+
+
+# Map engine phase names -> phase-strip row keys.
+_PHASE_KEY = {
+    "scanning":  "scan",
+    "scan-done": "scan",
+    "copying":   "copy",
+    "verifying": "verify",
+    "done":      "verify",  # or "copy" when verify is disabled
+    "error":     "",
+}
 
 
 def _human_bytes(n: float) -> str:
@@ -251,13 +263,40 @@ class MainWindow(QtWidgets.QMainWindow):
         actions.addStretch(1); actions.addWidget(self.delete_btn)
         dl.addLayout(actions)
 
-        # Progress
-        self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0)
-        dl.addWidget(self.progress)
-        # Use a fixed-height label so a long current-file path can't push the
-        # whole window taller. Long text is elided in the middle (e.g.
-        # "Dest • 12/100 files • …/long/path/file.txt") so both the summary
-        # at the start and the file name at the end stay visible.
+        # Progress area — four stacked parts:
+        #   1. Phase strip (Scan / Copy / Verify rows + overall bar) on the
+        #      left and a 72x72 scan donut on the right.
+        #   2. "Start copy" confirm button (hidden unless the current
+        #      profile wants confirm-before-copy AND the engine has
+        #      reached scan-done).
+        #   3. Verify banner (hidden unless a verify-enabled run just
+        #      finished — green for pass, red clickable for fail).
+        #   4. Small current-file / status line.
+        progress_row = QtWidgets.QHBoxLayout()
+        progress_row.setSpacing(12)
+        self.phase_strip = PhaseStripWidget()
+        progress_row.addWidget(self.phase_strip, 1)
+        self.scan_donut = ScanDonutWidget(diameter=72)
+        donut_col = QtWidgets.QVBoxLayout()
+        donut_col.addStretch(1)
+        donut_col.addWidget(self.scan_donut, 0, QtCore.Qt.AlignHCenter)
+        donut_col.addStretch(1)
+        progress_row.addLayout(donut_col)
+        dl.addLayout(progress_row)
+
+        # Confirm-copy button (hidden by default)
+        self.confirm_copy_btn = QtWidgets.QPushButton("▶  Start copy")
+        self.confirm_copy_btn.setObjectName("primary")
+        self.confirm_copy_btn.setVisible(False)
+        self.confirm_copy_btn.clicked.connect(self._on_confirm_copy_clicked)
+        dl.addWidget(self.confirm_copy_btn)
+
+        # Verify banner (hidden by default)
+        self.verify_banner = VerifyBanner()
+        dl.addWidget(self.verify_banner)
+
+        # Current file / status text. Elided in the middle to stop a long
+        # path from widening the window.
         self.progress_label = QtWidgets.QLabel("Idle.")
         self.progress_label.setObjectName("muted")
         self.progress_label.setSizePolicy(
@@ -265,17 +304,32 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.progress_label.setMinimumHeight(self.progress_label.sizeHint().height())
         self.progress_label.setMaximumHeight(self.progress_label.sizeHint().height())
-        # Tooltip mirrors the full text so users can hover to read the rest.
         self.progress_label.setToolTip("")
         dl.addWidget(self.progress_label)
 
+        # Track the engine phase so we know when to mark the previous phase
+        # as "done" (fill its bar to 100 and switch the icon). Starts at
+        # empty so the first progress event always registers.
+        self._prev_phase: str = ""
+        self._phase_started_at: dict = {}
+
         detail.addWidget(self.detail_card)
 
-        # Log viewer
-        log_card = QtWidgets.QFrame(); log_card.setObjectName("card")
-        ll = QtWidgets.QVBoxLayout(log_card); ll.setContentsMargins(18, 16, 18, 16); ll.setSpacing(6)
+        # Log viewer — collapsible so the progress area can take the full
+        # bottom half of the window when the user doesn't need the log.
+        self._log_card = QtWidgets.QFrame(); self._log_card.setObjectName("card")
+        ll = QtWidgets.QVBoxLayout(self._log_card)
+        ll.setContentsMargins(18, 16, 18, 16); ll.setSpacing(6)
         log_header = QtWidgets.QHBoxLayout()
-        log_header.addWidget(QtWidgets.QLabel("Log", objectName="h2"))
+        self._log_toggle = QtWidgets.QToolButton()
+        self._log_toggle.setText("Log")
+        self._log_toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self._log_toggle.setArrowType(QtCore.Qt.DownArrow)
+        self._log_toggle.setCheckable(True)
+        self._log_toggle.setChecked(True)  # expanded by default
+        self._log_toggle.setAutoRaise(True)
+        self._log_toggle.clicked.connect(self._toggle_log_collapsed)
+        log_header.addWidget(self._log_toggle)
         log_header.addStretch(1)
         clear_log_btn = QtWidgets.QPushButton("Clear")
         clear_log_btn.clicked.connect(self._clear_log)
@@ -287,7 +341,11 @@ class MainWindow(QtWidgets.QMainWindow):
         f = QtGui.QFont("Consolas"); f.setStyleHint(QtGui.QFont.Monospace); f.setPointSize(9)
         self.log_view.setFont(f)
         ll.addWidget(self.log_view, 1)
-        detail.addWidget(log_card, 1)
+        # Restore collapsed state from settings.
+        if getattr(self.settings, "log_collapsed", False):
+            self._log_toggle.setChecked(False)
+            self._apply_log_collapsed_state()
+        detail.addWidget(self._log_card, 1)
 
         # Status bar
         self.statusBar().showMessage("Ready")
@@ -383,7 +441,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dest_view.clear()
         for b in (self.run_btn, self.verify_btn, self.restore_btn, self.schedule_btn, self.edit_btn, self.delete_btn):
             b.setEnabled(False)
-        self.progress.setValue(0); self._set_progress_text("")
+        self.phase_strip.reset(verify_enabled=True)
+        self.scan_donut.reset()
+        self.verify_banner.dismiss()
+        self.confirm_copy_btn.setVisible(False)
+        self._set_progress_text("")
 
     def _render_current(self) -> None:
         p = self.current
@@ -553,7 +615,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn.setEnabled(True)
         self.edit_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
-        self.progress.setValue(0)
+        self.phase_strip.reset(verify_enabled=self.current.verify_after_copy)
+        self.scan_donut.reset()
+        self.verify_banner.dismiss()
+        self.confirm_copy_btn.setVisible(False)
+        self._prev_phase = ""
+        self._phase_started_at = {}
         self._set_progress_text("Scanning…")
         self.statusBar().showMessage("Backup running…")
 
@@ -603,7 +670,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.edit_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
         self.run_group_btn.setEnabled(False)
-        self.progress.setValue(0)
+        any_verify = any(p.verify_after_copy for p in profiles)
+        self.phase_strip.reset(verify_enabled=any_verify)
+        self.scan_donut.reset()
+        self.verify_banner.dismiss()
+        self.confirm_copy_btn.setVisible(False)
+        self._prev_phase = ""
+        self._phase_started_at = {}
         self._set_progress_text(f"Group run starting — {len(profiles)} profile(s)…")
         self.statusBar().showMessage(f"Group run: {len(profiles)} profile(s)…")
         self.group_worker.start()
@@ -621,7 +694,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
         self.run_group_btn.setEnabled(True)
-        self.progress.setValue(100)
+        self.confirm_copy_btn.setVisible(False)
 
         # Aggregate counters for the group summary.
         total_copied = sum(r.files_copied for r in results)
@@ -630,11 +703,33 @@ class MainWindow(QtWidgets.QMainWindow):
         total_verify_issues = sum(len(r.verify_issues) for r in results)
         total_bytes = sum(r.bytes_copied for r in results)
         verify_part = ""
-        if any(r.verify_checked for r in results):
+        any_verified = any(r.verify_checked for r in results)
+        if any_verified:
             if total_verify_issues:
                 verify_part = f", verify FAILED on {total_verify_issues}"
             else:
                 verify_part = ", verify OK"
+        # Fill the phase strip to 100% to signal "done".
+        self.phase_strip.mark_done("scan")
+        self.phase_strip.mark_done("copy")
+        if any_verified:
+            state = "issue" if total_verify_issues else "done"
+            self.phase_strip.set_phase("verify", state, 100, "")
+        # Verify banner if any profile verified.
+        if any_verified:
+            if total_verify_issues:
+                self.verify_banner.show_fail(
+                    f"Verify FAILED — {total_verify_issues} issue(s) across "
+                    f"{len(results)} profile(s). {total_copied} copied, "
+                    f"{_human_bytes(total_bytes)}.",
+                    on_click=self._show_issues,
+                )
+            else:
+                files_checked = sum(r.verify_checked for r in results)
+                self.verify_banner.show_pass(
+                    f"Verify PASSED — {files_checked} files checked across "
+                    f"{len(results)} profile(s), all present and sized correctly."
+                )
         self._set_progress_text(
             f"Group done — {len(results)} profile(s)"
             f"  •  copied {total_copied}"
@@ -693,7 +788,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn.setEnabled(True)
         self.edit_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
-        self.progress.setValue(0)
+        # Standalone Verify: hide scan/copy rows, show only the verify row.
+        self.phase_strip.set_verify_only_mode()
+        self.scan_donut.reset()
+        self.verify_banner.dismiss()
+        self.confirm_copy_btn.setVisible(False)
+        self._prev_phase = ""
+        self._phase_started_at = {}
         self._set_progress_text("Verifying…")
         self.statusBar().showMessage("Verify running…")
 
@@ -705,13 +806,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn.setEnabled(False)
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
-        self.progress.setValue(100)
         bytes_mb = result.bytes_checked / (1024 * 1024)
         n_issues = (
             len(result.mismatches) + len(result.missing_at_dest)
             + len(result.unexpected_at_dest) + len(result.errors)
         )
         verdict = "OK" if n_issues == 0 else f"{n_issues} issue(s)"
+        self.phase_strip.set_phase(
+            "verify",
+            "done" if n_issues == 0 else "issue",
+            100,
+            f"{result.files_checked} files  •  {bytes_mb:.1f} MB  •  "
+            f"{_human_time(result.duration_s)}",
+        )
         self._set_progress_text(
             f"Verify done — checked {result.files_checked} files "
             f"({bytes_mb:.1f} MB) in {_human_time(result.duration_s)} → {verdict}"
@@ -721,6 +828,17 @@ class MainWindow(QtWidgets.QMainWindow):
             result.all_issues,
             title=f"Verify of '{self.current.name}' — issues" if self.current else "Verify — issues",
         )
+        if n_issues == 0:
+            self.verify_banner.show_pass(
+                f"Verify PASSED — {result.files_checked} files checked "
+                f"({bytes_mb:.1f} MB), all present and sized correctly."
+            )
+        else:
+            self.verify_banner.show_fail(
+                f"Verify FAILED — {n_issues} issue(s). "
+                f"{result.files_checked} files checked ({bytes_mb:.1f} MB).",
+                on_click=self._show_issues,
+            )
 
     def _on_verify_finished_err(self, msg: str) -> None:
         self.verify_worker = None
@@ -735,40 +853,92 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.critical(self, "Verify failed", msg)
 
     def _on_progress(self, p) -> None:
+        """Route an engine progress event to the phase strip, donut and text.
+
+        The engine emits five phases: scanning, scan-done, copying, verifying,
+        done. We map those onto three rows (scan / copy / verify). The donut
+        is only driven during the scanning + scan-done phases.
+        """
         phase = getattr(p, "phase", "copying") or "copying"
+        now = datetime.now()
 
-        # During the WALKING + CLASSIFYING phase ("scanning"):
-        #   - while files_total is 0 (walking, total unknown): show indeterminate bar
-        #   - once files_total is known: show files_done / files_total
-        # During the COPYING phase: bar tracks bytes_done / bytes_total (which
-        # are now scoped to the to-copy subset, not the whole scan).
-        if phase == "scanning":
-            if p.files_total <= 0:
-                # Indeterminate — Qt convention: range (0, 0).
-                if self.progress.maximum() != 0:
-                    self.progress.setRange(0, 0)
-            else:
-                if self.progress.maximum() != 100:
-                    self.progress.setRange(0, 100)
-                self.progress.setValue(min(100, int(p.files_done * 100 / max(1, p.files_total))))
-        else:  # copying / done / error
-            if self.progress.maximum() != 100:
-                self.progress.setRange(0, 100)
+        # On a phase transition, mark the previous phase done with its
+        # duration so the row shows "(1.3s)" once the next row takes over.
+        if phase != self._prev_phase:
+            self._on_phase_transition(self._prev_phase, phase, now)
+            self._prev_phase = phase
+
+        # ---- scanning / scan-done -----------------------------------
+        if phase in ("scanning", "scan-done"):
+            # Classify progress — live donut update: files_skipped = unchanged
+            # so far, (files_done - files_skipped) = to-copy so far.
+            to_copy_so_far = max(0, p.files_done - p.files_skipped)
+            self.scan_donut.set_fractions(to_copy_so_far, p.files_skipped)
+
+            if phase == "scanning" and p.files_total > 0:
+                pct = p.files_done * 100.0 / max(1, p.files_total)
+                detail = f"{p.files_done}/{p.files_total}"
+                self.phase_strip.set_phase("scan", "running", pct, detail)
+            elif phase == "scanning":
+                self.phase_strip.set_phase("scan", "running", 0, "walking…")
+            else:  # scan-done
+                self.phase_strip.set_phase(
+                    "scan", "done", 100,
+                    f"{p.files_total} files  •  {_human_bytes(p.bytes_total)}",
+                )
+                # Final donut update with the resolved counts.
+                self.scan_donut.set_fractions(
+                    p.files_to_copy, p.files_skipped,
+                )
+                # Show the confirm button if the profile asked for it.
+                if self.current and getattr(
+                    self.current, "confirm_before_copy", False,
+                ):
+                    mb = _human_bytes(p.bytes_to_copy)
+                    self.confirm_copy_btn.setText(
+                        f"▶  Start copy  —  {p.files_to_copy} files, {mb}"
+                    )
+                    self.confirm_copy_btn.setVisible(True)
+
+        # ---- copying ---------------------------------------------------
+        elif phase == "copying":
+            # Hide the confirm button once the user has let it proceed.
+            self.confirm_copy_btn.setVisible(False)
             if p.bytes_total > 0:
-                self.progress.setValue(min(100, int(p.bytes_done * 100 / p.bytes_total)))
+                pct = p.bytes_done * 100.0 / p.bytes_total
             elif p.files_total > 0:
-                self.progress.setValue(min(100, int(p.files_done * 100 / p.files_total)))
+                pct = p.files_done * 100.0 / p.files_total
             else:
-                # Nothing needed copying — fill the bar so users see "done".
-                self.progress.setValue(100)
+                pct = 100.0
+            detail = (
+                f"{p.files_done}/{p.files_total} files  •  "
+                f"{_human_bytes(p.bytes_done)}/{_human_bytes(p.bytes_total)}"
+            )
+            self.phase_strip.set_phase("copy", "running", pct, detail)
 
+        # ---- verifying -------------------------------------------------
+        elif phase == "verifying":
+            if p.files_total > 0:
+                pct = p.files_done * 100.0 / p.files_total
+            else:
+                pct = 100.0
+            detail = f"{p.files_done}/{p.files_total} files"
+            self.phase_strip.set_phase("verify", "running", pct, detail)
+
+        # ---- done / error ---------------------------------------------
+        # These are terminal and handled by the finished_* slots; nothing
+        # special to do here.
+
+        # ---- bottom status line ---------------------------------------
         speed = _human_bytes(p.speed_bps) + "/s" if p.speed_bps > 1 else ""
         eta = _human_time(p.eta_seconds) if p.eta_seconds > 0 else ""
 
         if phase == "scanning":
-            # Walking has no total yet; classifying does. Phrase accordingly.
             if p.files_total <= 0:
-                tally = f"Scanning source — {p.files_done} files found ({_human_bytes(p.bytes_done)})"
+                tally = (
+                    f"Scanning source — {p.files_done} files found "
+                    f"({_human_bytes(p.bytes_done)})"
+                )
             else:
                 tally = (
                     f"Scanning — {p.files_done} of {p.files_total} checked"
@@ -776,38 +946,33 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
             parts = [p.dest_label, tally]
         elif phase == "scan-done":
-            # Pause-and-show summary between scan and copy.
             mb = _human_bytes(p.bytes_to_copy)
-            tally = (
-                f"Scan complete — {p.files_to_copy} to copy ({mb}), "
-                f"{p.files_skipped} unchanged. Starting copy…"
-            )
+            if self.current and getattr(
+                self.current, "confirm_before_copy", False,
+            ):
+                tally = (
+                    f"Scan complete — {p.files_to_copy} to copy ({mb}), "
+                    f"{p.files_skipped} unchanged. Click 'Start copy' to proceed."
+                )
+            else:
+                tally = (
+                    f"Scan complete — {p.files_to_copy} to copy ({mb}), "
+                    f"{p.files_skipped} unchanged. Starting copy…"
+                )
             parts = [p.dest_label, tally]
-            # Hold the bar at 100% for this phase so the visual feels "complete".
-            if self.progress.maximum() != 100:
-                self.progress.setRange(0, 100)
-            self.progress.setValue(100)
         elif phase == "verifying":
-            # Post-copy: walking the source again to confirm everything is at
-            # the destination. files_total is the source count; files_done is
-            # how many we've checked so far.
-            if self.progress.maximum() != 100:
-                self.progress.setRange(0, 100)
-            if p.files_total > 0:
-                self.progress.setValue(min(100, int(p.files_done * 100 / p.files_total)))
-            tally = f"Verifying — {p.files_done} of {p.files_total} files checked at destination"
-            parts = [p.dest_label, tally]
+            parts = [
+                p.dest_label,
+                f"Verifying — {p.files_done} of {p.files_total} files",
+            ]
         else:
-            # Copying tally: show progress within the to-copy subset, plus the
-            # cumulative "unchanged" so users can see what was skipped.
             tally = (
                 f"Copying — {p.files_done} of {p.files_total} files"
                 f"  •  {p.files_skipped} unchanged"
             )
             if p.files_failed:
                 tally += f"  •  {p.files_failed} failed"
-            bytes_str = f"{_human_bytes(p.bytes_done)} / {_human_bytes(p.bytes_total)}"
-            parts = [p.dest_label, tally, bytes_str]
+            parts = [p.dest_label, tally]
             if speed:
                 parts.append(speed)
             if eta:
@@ -815,6 +980,32 @@ class MainWindow(QtWidgets.QMainWindow):
 
         full = "  •  ".join(parts) + ("  •  " + p.current_file if p.current_file else "")
         self._set_progress_text(full)
+
+    def _on_phase_transition(self, prev: str, now_phase: str, at: datetime) -> None:
+        """When the engine moves to a new phase, mark the previous one 'done'
+        with its elapsed time, and remember when this one started."""
+        # Record the new phase's start time.
+        self._phase_started_at[now_phase] = at
+        # Mark the outgoing phase as done (if there was one) with its duration.
+        if not prev or prev == now_phase:
+            return
+        key = _PHASE_KEY.get(prev)
+        if not key:
+            return
+        started = self._phase_started_at.get(prev)
+        if started is not None:
+            dt = max(0.0, (at - started).total_seconds())
+            self.phase_strip.mark_done(key, f"({_human_time(dt)})")
+        else:
+            self.phase_strip.mark_done(key, "")
+
+    def _on_confirm_copy_clicked(self) -> None:
+        """Signal the running worker that the user confirmed 'Start copy'."""
+        self.confirm_copy_btn.setVisible(False)
+        if self.worker:
+            self.worker.confirm_start_copy()
+        if self.group_worker:
+            self.group_worker.confirm_start_copy()
 
     def _set_progress_text(self, text: str) -> None:
         """Set progress_label text without letting it widen/grow the window.
@@ -852,13 +1043,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn.setEnabled(False)
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
-        self.progress.setValue(100)
+        self.confirm_copy_btn.setVisible(False)
         verify_part = ""
-        if getattr(result, "verify_checked", 0):
-            if result.verify_issues:
+        did_verify = bool(getattr(result, "verify_checked", 0))
+        verify_failed = did_verify and bool(result.verify_issues)
+        if did_verify:
+            if verify_failed:
                 verify_part = f", verify FAILED on {len(result.verify_issues)}"
             else:
                 verify_part = f", verified {result.verify_checked} OK"
+
+        # Fill the phase strip to reflect the terminal state.
+        self.phase_strip.mark_done("scan")
+        self.phase_strip.mark_done(
+            "copy",
+            f"{result.files_copied} files  •  "
+            f"{_human_bytes(result.bytes_copied)}",
+        )
+        if did_verify:
+            vstate = "issue" if verify_failed else "done"
+            self.phase_strip.set_phase(
+                "verify", vstate, 100,
+                f"{result.verify_checked} files  •  "
+                f"{len(result.verify_issues)} issue(s)" if verify_failed else
+                f"{result.verify_checked} files  •  all present",
+            )
+
         self._set_progress_text(
             f"Done — copied {result.files_copied} files "
             f"({_human_bytes(result.bytes_copied)}), "
@@ -874,6 +1084,21 @@ class MainWindow(QtWidgets.QMainWindow):
             all_issues,
             title=f"Backup of '{self.current.name}' — issues" if self.current else "Backup — issues",
         )
+        # Verify banner.
+        if did_verify:
+            if verify_failed:
+                self.verify_banner.show_fail(
+                    f"Verify FAILED — {len(result.verify_issues)} issue(s). "
+                    f"{result.verify_checked} files checked, "
+                    f"{result.files_copied} copied ({_human_bytes(result.bytes_copied)}).",
+                    on_click=self._show_issues,
+                )
+            else:
+                self.verify_banner.show_pass(
+                    f"Verify PASSED — {result.verify_checked} files checked "
+                    f"({_human_bytes(result.bytes_copied)} copied), "
+                    f"all present and sized correctly."
+                )
         self._refresh_profiles(select_id=self.current.id if self.current else "")
 
     # --- Issues panel ----------------------------------------------------
@@ -928,6 +1153,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _clear_log(self) -> None:
         self.log_view.clear()
+
+    def _toggle_log_collapsed(self) -> None:
+        """Button toggle: expand/collapse the log card content."""
+        self._apply_log_collapsed_state()
+        collapsed = not self._log_toggle.isChecked()
+        self.settings.log_collapsed = collapsed
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+
+    def _apply_log_collapsed_state(self) -> None:
+        """Hide the log_view when collapsed; show it when expanded. The
+        header (toggle + Clear button) stays visible either way so the user
+        can re-expand."""
+        expanded = self._log_toggle.isChecked()
+        self.log_view.setVisible(expanded)
+        self._log_toggle.setArrowType(
+            QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow,
+        )
 
     # --- Close handling --------------------------------------------------
 
