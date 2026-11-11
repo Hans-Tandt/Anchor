@@ -67,9 +67,13 @@ class BackupProfile:
     # logs a WARN line at the start of each run.
     exclude_globs: List[str] = field(default_factory=lambda: [
         "*.tmp", "*.log", "~$*", "Thumbs.db", ".DS_Store",
+    ])
+    # Directory exclusions: either a basename (e.g. "node_modules") matched
+    # anywhere in the tree, or an absolute path (matched case-insensitively).
+    # The walker checks both in ExclusionRules.is_dir_excluded.
+    exclude_dirs: List[str] = field(default_factory=lambda: [
         "node_modules", "__pycache__", ".venv",
     ])
-    exclude_dirs: List[str] = field(default_factory=list)  # absolute or basename
 
     # Engine options
     verify_with_hash: bool = False     # SHA-256 (slow) vs mtime+size (fast)

@@ -192,7 +192,17 @@ class BackupEngine:
         # Dropping `.git` from a backup silently throws away every commit,
         # branch and tag of every repo under the sources — almost never what
         # the user wants. The profile editor shows the same warning in red.
-        risky_vcs = {".git", ".svn", ".hg", ".bzr"} & set(self.profile.exclude_globs)
+        # Check both lists: the editor routes `.git` preset ticks into
+        # exclude_dirs, but older profiles may still have it in exclude_globs,
+        # and a direct absolute-path entry like D:/repo/.git also costs it.
+        vcs_names = {".git", ".svn", ".hg", ".bzr"}
+        risky_vcs = vcs_names & set(self.profile.exclude_globs)
+        risky_vcs |= vcs_names & set(self.profile.exclude_dirs)
+        risky_vcs |= {
+            os.path.basename(d.rstrip("/\\"))
+            for d in self.profile.exclude_dirs
+            if os.path.basename(d.rstrip("/\\")) in vcs_names
+        }
         if risky_vcs:
             log.warning(
                 "Profile '%s' excludes version-control metadata (%s). "

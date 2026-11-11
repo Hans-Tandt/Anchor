@@ -11,6 +11,65 @@ from ..destinations import test_destination
 from ..drives import list_drives
 
 
+# --- Exclusion presets -------------------------------------------------------
+#
+# Each category is (title, items). Each item is (label, patterns, kind, tip):
+#   kind="file" -> saved into BackupProfile.exclude_globs (matched by fnmatch
+#                  on file basename and on the file's rel-path)
+#   kind="dir"  -> saved into BackupProfile.exclude_dirs (matched by basename
+#                  equality in the walker; absolute paths also supported via
+#                  the folder-exclusions list below the presets).
+#
+# A preset ticks when ALL of its patterns are present in either exclusion
+# list of the profile (the "right" list by kind, or the other one — old
+# profiles that pre-date the split still work). On save, the preset's
+# patterns are routed into the correct list by kind.
+EXCLUSION_PRESETS: List = [
+    ("System junk", [
+        ("Thumbs.db", ["Thumbs.db"], "file", "Windows thumbnail cache"),
+        (".DS_Store", [".DS_Store"], "file", "macOS folder metadata"),
+        ("Office lock files (~$*)", ["~$*"], "file",
+         "Office/Word lock files created while a document is open"),
+        ("Temp files (*.tmp)", ["*.tmp"], "file", "Generic temp files"),
+        ("Log files (*.log)", ["*.log"], "file", "Log files"),
+        ("Swap files (*.swp)", ["*.swp"], "file", "Vim/Neovim swap files"),
+        ("Backup files (*.bak)", ["*.bak"], "file", "Generic .bak files"),
+    ]),
+    ("Build and cache folders", [
+        ("node_modules", ["node_modules"], "dir",
+         "Node.js dependencies — regenerate with `npm install`"),
+        ("__pycache__", ["__pycache__"], "dir", "Python bytecode cache"),
+        (".venv", [".venv"], "dir", "Python virtual environment"),
+        ("venv", ["venv"], "dir", "Python virtual environment (alternative name)"),
+        (".tox", [".tox"], "dir", "Tox test environments"),
+        ("dist", ["dist"], "dir",
+         "Generic build output — may match legitimate 'dist' folders you want to keep"),
+        ("build", ["build"], "dir",
+         "Generic build output — may match legitimate 'build' folders you want to keep"),
+        ("target", ["target"], "dir",
+         "Rust/Java build output — may match folders you want to keep"),
+        (".gradle", [".gradle"], "dir", "Gradle cache"),
+        (".next", [".next"], "dir", "Next.js build cache"),
+        (".pytest_cache", [".pytest_cache"], "dir", "pytest cache"),
+        (".mypy_cache", [".mypy_cache"], "dir", "mypy cache"),
+    ]),
+    ("IDE metadata", [
+        (".idea", [".idea"], "dir", "JetBrains IDE project settings"),
+        (".vscode", [".vscode"], "dir", "VS Code workspace settings"),
+        (".vs", [".vs"], "dir", "Visual Studio IDE files"),
+    ]),
+    ("Version control  (⚠ dangerous)", [
+        (".git", [".git"], "dir",
+         "⚠ Git history — ticking this drops EVERY commit, branch and tag from your backup"),
+        (".svn", [".svn"], "dir", "⚠ Subversion history"),
+        (".hg", [".hg"], "dir", "⚠ Mercurial history"),
+        (".bzr", [".bzr"], "dir", "⚠ Bazaar history"),
+    ]),
+]
+
+_VCS_RISKY = {".git", ".svn", ".hg", ".bzr"}
+
+
 # --- Destination dialog ------------------------------------------------------
 
 class DestinationDialog(QtWidgets.QDialog):
@@ -251,17 +310,73 @@ class ProfileEditor(QtWidgets.QDialog):
         tabs.addTab(dest_w, "Destinations")
 
         # --- Exclusions tab ---
+        # Three sections, top to bottom:
+        #   1. Preset grid — the common cases, one checkbox each.
+        #   2. Folder exclusions — specific absolute folder paths to skip.
+        #   3. Custom patterns — free-form glob textarea for anything else.
+        # The red VCS warning banner sits below everything (not scrolled)
+        # so it is always visible when a VCS preset is ticked or a VCS
+        # name appears in the textarea or folder list.
         ex_w = QtWidgets.QWidget()
-        el = QtWidgets.QVBoxLayout(ex_w)
-        el.addWidget(QtWidgets.QLabel("File/folder patterns to skip (one per line, glob syntax):"))
+        ex_outer = QtWidgets.QVBoxLayout(ex_w)
+        ex_outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        inner = QtWidgets.QWidget()
+        el = QtWidgets.QVBoxLayout(inner)
+
+        # 1. Preset grid
+        self._preset_checkboxes: List[QtWidgets.QCheckBox] = []
+        for category, items in EXCLUSION_PRESETS:
+            group = QtWidgets.QGroupBox(category)
+            grid = QtWidgets.QGridLayout(group)
+            grid.setHorizontalSpacing(12)
+            grid.setVerticalSpacing(6)
+            for i, (label, patterns, kind, tip) in enumerate(items):
+                cb = QtWidgets.QCheckBox(label)
+                cb.setToolTip(tip)
+                cb.setProperty("patterns", list(patterns))
+                cb.setProperty("kind", kind)
+                grid.addWidget(cb, i // 3, i % 3)
+                self._preset_checkboxes.append(cb)
+            el.addWidget(group)
+
+        # 2. Folder exclusions — specific absolute paths
+        folder_group = QtWidgets.QGroupBox("Specific folders to skip (absolute paths)")
+        fg = QtWidgets.QVBoxLayout(folder_group)
+        self.folder_excludes_list = QtWidgets.QListWidget()
+        self.folder_excludes_list.setToolTip(
+            "Specific folders that should NEVER be backed up, by absolute path.\n"
+            "Unlike the preset basenames (which match the folder by name anywhere\n"
+            "in the source tree), these only match the one folder you pick."
+        )
+        fg.addWidget(self.folder_excludes_list, 1)
+        fbtns = QtWidgets.QHBoxLayout()
+        add_fex = QtWidgets.QPushButton("Add folder...")
+        add_fex.clicked.connect(self._add_folder_exclude)
+        rm_fex = QtWidgets.QPushButton("Remove")
+        rm_fex.clicked.connect(self._remove_folder_exclude)
+        fbtns.addWidget(add_fex); fbtns.addWidget(rm_fex); fbtns.addStretch(1)
+        fg.addLayout(fbtns)
+        el.addWidget(folder_group)
+
+        # 3. Custom patterns (free-form)
+        custom_label = QtWidgets.QLabel(
+            "Custom patterns (advanced — glob syntax, one per line):"
+        )
+        el.addWidget(custom_label)
         self.excludes_edit = QtWidgets.QPlainTextEdit()
-        self.excludes_edit.setPlainText("\n".join(self.profile.exclude_globs))
-        el.addWidget(self.excludes_edit, 1)
-        # Red warning that lights up when `.git` is in the list — excluding
-        # Git history from a backup is almost never what the user actually
-        # wants (it drops every commit, branch and tag from the repos they
-        # back up). This is the GUI counterpart of the WARN line the engine
-        # also logs at run start.
+        self.excludes_edit.setPlaceholderText("e.g. *.iso, archive_*, oldstuff/*")
+        self.excludes_edit.setMaximumHeight(100)
+        el.addWidget(self.excludes_edit)
+
+        scroll.setWidget(inner)
+        ex_outer.addWidget(scroll, 1)
+
+        # 4. VCS warning banner — sits below the scroll area so it is always
+        # visible regardless of how far down the user has scrolled.
         self.excludes_warn = QtWidgets.QLabel()
         self.excludes_warn.setWordWrap(True)
         self.excludes_warn.setStyleSheet(
@@ -269,25 +384,22 @@ class ProfileEditor(QtWidgets.QDialog):
             "border: 1px solid #a04040; padding: 8px; border-radius: 4px; }"
         )
         self.excludes_warn.setVisible(False)
-        el.addWidget(self.excludes_warn)
+        ex_outer.addWidget(self.excludes_warn)
 
-        def _refresh_excludes_warning() -> None:
-            lines = [l.strip() for l in self.excludes_edit.toPlainText().splitlines()]
-            risky = {".git", ".svn", ".hg", ".bzr"}
-            found = sorted(set(lines) & risky)
-            if found:
-                self.excludes_warn.setText(
-                    "⚠  WARNING: " + ", ".join(found)
-                    + " is in the exclusion list. The version-control history "
-                    "(commits, branches, tags) of your repositories will NOT "
-                    "be backed up. Remove the line above if you want Anchor to "
-                    "protect your Git history."
-                )
-                self.excludes_warn.setVisible(True)
-            else:
-                self.excludes_warn.setVisible(False)
-        self.excludes_edit.textChanged.connect(_refresh_excludes_warning)
-        _refresh_excludes_warning()
+        # Load current profile values into the UI
+        self._load_exclusions_into_ui()
+
+        # Wire warning refresh to every input
+        for cb in self._preset_checkboxes:
+            cb.toggled.connect(self._refresh_excludes_warning)
+        self.excludes_edit.textChanged.connect(self._refresh_excludes_warning)
+        self.folder_excludes_list.model().rowsInserted.connect(
+            lambda *_: self._refresh_excludes_warning()
+        )
+        self.folder_excludes_list.model().rowsRemoved.connect(
+            lambda *_: self._refresh_excludes_warning()
+        )
+        self._refresh_excludes_warning()
 
         tabs.addTab(ex_w, "Exclusions")
 
@@ -426,14 +538,135 @@ class ProfileEditor(QtWidgets.QDialog):
         self._destinations.pop(row)
         self.dest_list.takeItem(row)
 
+    # --- exclusions helpers ---------------------------------------------
+
+    def _add_folder_exclude(self) -> None:
+        d = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Pick a folder to exclude from backups"
+        )
+        if not d:
+            return
+        # Avoid duplicates (case-insensitive on Windows)
+        existing = {
+            os.path.normcase(self.folder_excludes_list.item(i).text())
+            for i in range(self.folder_excludes_list.count())
+        }
+        if os.path.normcase(d) in existing:
+            return
+        self.folder_excludes_list.addItem(d)
+
+    def _remove_folder_exclude(self) -> None:
+        for it in self.folder_excludes_list.selectedItems():
+            self.folder_excludes_list.takeItem(self.folder_excludes_list.row(it))
+
+    def _load_exclusions_into_ui(self) -> None:
+        """Tick preset boxes, fill the folder list and the custom textarea
+        from BackupProfile.exclude_globs / .exclude_dirs.
+
+        A preset's pattern may live in either list (old profiles pre-date
+        the split) — we look in both when deciding to tick, and remove the
+        matched entries from the "leftover" pool so they don't also appear
+        as duplicates in the textarea / folder list.
+        """
+        file_pats = list(self.profile.exclude_globs)
+        dir_pats = list(self.profile.exclude_dirs)
+
+        for cb in self._preset_checkboxes:
+            patterns = cb.property("patterns") or []
+            # all patterns must be present in SOME exclusion list
+            if all((p in file_pats) or (p in dir_pats) for p in patterns):
+                cb.setChecked(True)
+                for p in patterns:
+                    if p in file_pats:
+                        file_pats.remove(p)
+                    elif p in dir_pats:
+                        dir_pats.remove(p)
+
+        # Remaining dir_pats: absolute paths -> folder list;
+        # basenames (plain names) -> keep in textarea so the user still sees
+        # them. On save they'll be routed back to exclude_globs (fnmatch with
+        # a literal pattern still matches the basename — behavior unchanged).
+        leftover_text: List[str] = []
+        for d in dir_pats:
+            if os.path.isabs(d) or d.startswith("\\\\"):
+                self.folder_excludes_list.addItem(d)
+            else:
+                leftover_text.append(d)
+        leftover_text.extend(file_pats)
+        self.excludes_edit.setPlainText("\n".join(leftover_text))
+
+    def _refresh_excludes_warning(self) -> None:
+        """Show the red VCS banner when the exclusion set names a VCS folder,
+        no matter where it came from (preset, textarea or folder list)."""
+        found: set = set()
+        for cb in self._preset_checkboxes:
+            if cb.isChecked():
+                for p in (cb.property("patterns") or []):
+                    if p in _VCS_RISKY:
+                        found.add(p)
+        for line in self.excludes_edit.toPlainText().splitlines():
+            s = line.strip()
+            if s in _VCS_RISKY:
+                found.add(s)
+        for i in range(self.folder_excludes_list.count()):
+            # basename of an absolute path like D:/repo/.git also costs history
+            name = os.path.basename(
+                self.folder_excludes_list.item(i).text().rstrip("/\\")
+            )
+            if name in _VCS_RISKY:
+                found.add(name)
+
+        if found:
+            names = ", ".join(sorted(found))
+            self.excludes_warn.setText(
+                "⚠  WARNING: " + names
+                + " is in the exclusion list. The version-control history "
+                "(commits, branches, tags) of your repositories will NOT "
+                "be backed up. Untick the box above (or remove the line) "
+                "if you want Anchor to protect your Git history."
+            )
+            self.excludes_warn.setVisible(True)
+        else:
+            self.excludes_warn.setVisible(False)
+
+    def _collect_exclusions(self) -> tuple:
+        """Return (exclude_globs, exclude_dirs) built from the UI state."""
+        file_globs: List[str] = []
+        dir_names: List[str] = []
+
+        for cb in self._preset_checkboxes:
+            if not cb.isChecked():
+                continue
+            kind = cb.property("kind")
+            for p in (cb.property("patterns") or []):
+                if kind == "file":
+                    if p not in file_globs:
+                        file_globs.append(p)
+                else:
+                    if p not in dir_names:
+                        dir_names.append(p)
+
+        for line in self.excludes_edit.toPlainText().splitlines():
+            s = line.strip()
+            if s and s not in file_globs:
+                file_globs.append(s)
+
+        for i in range(self.folder_excludes_list.count()):
+            p = self.folder_excludes_list.item(i).text().strip()
+            if p and p not in dir_names:
+                dir_names.append(p)
+
+        return file_globs, dir_names
+
     def _accept(self) -> None:
         name = self.name_edit.text().strip() or "Unnamed"
         sources = [self.sources_list.item(i).text() for i in range(self.sources_list.count())]
-        excludes = [l.strip() for l in self.excludes_edit.toPlainText().splitlines() if l.strip()]
+        file_globs, dir_names = self._collect_exclusions()
         self.profile.name = name
         self.profile.sources = sources
         self.profile.destinations = list(self._destinations)
-        self.profile.exclude_globs = excludes
+        self.profile.exclude_globs = file_globs
+        self.profile.exclude_dirs = dir_names
         self.profile.verify_with_hash = self.verify_hash.isChecked()
         self.profile.mirror_deletions = self.mirror_del.isChecked()
         self.profile.mirror_max_delete_pct = int(self.mirror_cap.value())
