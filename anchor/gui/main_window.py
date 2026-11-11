@@ -307,19 +307,35 @@ class MainWindow(QtWidgets.QMainWindow):
         donut_col.setSpacing(2)
         donut_col.addStretch(1)
         donut_col.addWidget(self.scan_donut, 0, QtCore.Qt.AlignHCenter)
-        self._donut_caption = QtWidgets.QLabel("to copy")
-        self._donut_caption.setAlignment(QtCore.Qt.AlignHCenter)
-        self._donut_caption.setStyleSheet("color: #8a8578; font-size: 8pt;")
-        self._donut_caption.setToolTip(self.scan_donut.toolTip())
-        donut_col.addWidget(self._donut_caption)
+        # Legend below the donut: coloured dot + label + live count, one row
+        # per slice. "to copy" uses the same gold as the donut's accent
+        # slice; "unchanged" uses the muted grey of the ring background.
+        # Both share the donut's tooltip.
+        legend_tip = self.scan_donut.toolTip()
+        self._donut_legend_copy = QtWidgets.QLabel()
+        self._donut_legend_copy.setAlignment(QtCore.Qt.AlignHCenter)
+        self._donut_legend_copy.setStyleSheet(
+            "color: #ece6d8; font-size: 8pt;"
+        )
+        self._donut_legend_copy.setToolTip(legend_tip)
+        self._donut_legend_skip = QtWidgets.QLabel()
+        self._donut_legend_skip.setAlignment(QtCore.Qt.AlignHCenter)
+        self._donut_legend_skip.setStyleSheet(
+            "color: #8a8578; font-size: 8pt;"
+        )
+        self._donut_legend_skip.setToolTip(legend_tip)
+        donut_col.addWidget(self._donut_legend_copy)
+        donut_col.addWidget(self._donut_legend_skip)
         donut_col.addStretch(1)
         progress_row.addLayout(donut_col)
         dl.addLayout(progress_row)
-        # Donut defaults to visible — hide it until a backup run reaches
-        # scan-done, otherwise it's on-screen at app launch with nothing
-        # meaningful to show.
+        # Donut defaults to visible — hide it (and the legend) until a
+        # backup run reaches scan-done, otherwise they're on-screen at app
+        # launch with nothing meaningful to show.
         self.scan_donut.setVisible(False)
-        self._donut_caption.setVisible(False)
+        self._donut_legend_copy.setVisible(False)
+        self._donut_legend_skip.setVisible(False)
+        self._update_donut_legend(0, 0)
 
         # Confirm-copy button (hidden by default)
         self.confirm_copy_btn = QtWidgets.QPushButton("▶  Start copy")
@@ -1019,6 +1035,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.scan_donut.set_fractions(
                     p.files_to_copy, p.files_skipped,
                 )
+                self._update_donut_legend(
+                    p.files_to_copy, p.files_skipped,
+                )
                 self._show_scan_donut(True)
                 # Show the confirm button if the profile asked for it.
                 if self.current and getattr(
@@ -1138,11 +1157,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self.group_worker.confirm_start_copy()
 
     def _show_scan_donut(self, visible: bool) -> None:
-        """Toggle the scan donut AND its caption together, so they appear/
+        """Toggle the scan donut AND its legend together, so they appear/
         disappear as a single unit. The donut is only meaningful from the
         scan-done phase onwards within a Backup run."""
         self.scan_donut.setVisible(visible)
-        self._donut_caption.setVisible(visible)
+        self._donut_legend_copy.setVisible(visible)
+        self._donut_legend_skip.setVisible(visible)
+
+    def _update_donut_legend(self, copy_count: int, unchanged_count: int) -> None:
+        """Fill the two legend rows under the donut with current counts.
+        Numbers use thousands separators (42,733) so big totals stay
+        readable at a glance."""
+        # The bullet character "●" is drawn in the slice colour via rich
+        # text so it visually matches the donut without needing a second
+        # painter. The accent gold is the same as _ACCENT in
+        # progress_widgets.py; the muted grey matches _MUTED there.
+        self._donut_legend_copy.setText(
+            f'<span style="color:#d4a85a">●</span>  to copy  '
+            f'<b>{copy_count:,}</b>'
+        )
+        self._donut_legend_skip.setText(
+            f'<span style="color:#8a8578">●</span>  unchanged  '
+            f'<b>{unchanged_count:,}</b>'
+        )
 
     def _set_progress_text(self, text: str) -> None:
         """Set progress_label text without letting it widen/grow the window.
