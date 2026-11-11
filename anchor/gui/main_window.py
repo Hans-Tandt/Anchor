@@ -103,6 +103,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.group_worker: Optional[BackupGroupWorker] = None
         self.profiles: list[BackupProfile] = []
         self.current: Optional[BackupProfile] = None
+
+        # Blink timers for the Sources / Destinations group boxes. When one
+        # has a missing entry the box frame flashes red to pull the user's
+        # attention; when everything is present the frame is a steady green;
+        # when the profile has no entries at all the frame uses the neutral
+        # border color. Phases are flipped on each timer tick and the current
+        # stylesheet applied to the matching QGroupBox.
+        self._source_blink_phase = False
+        self._dest_blink_phase = False
+        self._source_blink = QtCore.QTimer(self)
+        self._source_blink.setInterval(500)
+        self._source_blink.timeout.connect(self._tick_source_blink)
+        self._dest_blink = QtCore.QTimer(self)
+        self._dest_blink.setInterval(500)
+        self._dest_blink.timeout.connect(self._tick_dest_blink)
         # Errors from the most recent run, exposed via the "View N issues"
         # button. Lives on the window so the Verify action can populate it too.
         self._last_errors: list[str] = []
@@ -447,6 +462,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dest_view.clear()
         for b in (self.run_btn, self.verify_btn, self.restore_btn, self.schedule_btn, self.edit_btn, self.delete_btn):
             b.setEnabled(False)
+        # Stop any blink in progress and reset Source/Destination frames.
+        self._source_blink.stop(); self._dest_blink.stop()
+        self.sources_box.setStyleSheet(self._frame_qss(self._FRAME_NEUTRAL))
+        self.dest_box.setStyleSheet(self._frame_qss(self._FRAME_NEUTRAL))
         self.phase_strip.reset(verify_enabled=True)
         self.scan_donut.reset()
         self.scan_donut.setVisible(False)  # idle: no donut shown
@@ -482,6 +501,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.schedule_label.setText("Schedule: not set")
 
         self.sources_view.clear()
+        src_missing = 0
         if not p.sources:
             self.sources_view.addItem("(no sources — click Edit to add)")
         for s in p.sources:
@@ -490,9 +510,15 @@ class MainWindow(QtWidgets.QMainWindow):
             if not os.path.exists(s):
                 it.setForeground(QtGui.QBrush(QtGui.QColor("#e35d6a")))
                 it.setText(s + "    ⚠ missing")
+                src_missing += 1
             self.sources_view.addItem(it)
+        self._apply_frame_state(
+            self.sources_box, self._source_blink,
+            has_items=bool(p.sources), any_missing=src_missing > 0,
+        )
 
         self.dest_view.clear()
+        dst_missing = 0
         if not p.destinations:
             self.dest_view.addItem("(no destinations — click Edit to add)")
         for d in p.destinations:
@@ -504,11 +530,78 @@ class MainWindow(QtWidgets.QMainWindow):
             it.setToolTip(txt)
             if not available:
                 it.setForeground(QtGui.QBrush(QtGui.QColor("#e9a23b")))
+                dst_missing += 1
             self.dest_view.addItem(it)
+        self._apply_frame_state(
+            self.dest_box, self._dest_blink,
+            has_items=bool(p.destinations), any_missing=dst_missing > 0,
+        )
 
     def _refresh_destination_freshness(self) -> None:
         if self.current and not self.worker:
             self._render_current()
+
+    # --- Sources/Destinations frame coloring ----------------------------
+
+    # Steady colours used by _apply_frame_state and the blink ticks. Kept
+    # here so the two phases of the red blink share the same shape and only
+    # the border colour differs.
+    _FRAME_GREEN = "#5fb88a"
+    _FRAME_RED_BRIGHT = "#e35d6a"
+    _FRAME_RED_DIM = "#7a2e35"
+    _FRAME_NEUTRAL = "#3a3220"   # matches theme's default border
+
+    def _frame_qss(self, color: str) -> str:
+        """Stylesheet for a Sources/Destinations QGroupBox with a given
+        border colour. Width is 2px so the color is clearly visible; the
+        title positioning mirrors Qt's default so the title doesn't jump
+        when we switch between colors."""
+        return (
+            f"QGroupBox {{ border: 2px solid {color}; border-radius: 6px;"
+            f" margin-top: 10px; padding-top: 6px; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px;"
+            f" padding: 0 4px; color: {color}; }}"
+        )
+
+    def _apply_frame_state(
+        self,
+        box: QtWidgets.QGroupBox,
+        blink_timer: QtCore.QTimer,
+        has_items: bool,
+        any_missing: bool,
+    ) -> None:
+        """Pick the right frame colour and start/stop the blink."""
+        if not has_items:
+            blink_timer.stop()
+            box.setStyleSheet(self._frame_qss(self._FRAME_NEUTRAL))
+        elif any_missing:
+            # Start the blink; the tick handler keeps toggling the colour.
+            if not blink_timer.isActive():
+                blink_timer.start()
+            # Set the bright colour immediately so the effect is instant,
+            # and prime the phase so the first tick flips to dim (clean
+            # alternation instead of two bright in a row).
+            box.setStyleSheet(self._frame_qss(self._FRAME_RED_BRIGHT))
+            if blink_timer is self._source_blink:
+                self._source_blink_phase = True
+            else:
+                self._dest_blink_phase = True
+        else:
+            blink_timer.stop()
+            box.setStyleSheet(self._frame_qss(self._FRAME_GREEN))
+
+    def _tick_source_blink(self) -> None:
+        # Set colour from current phase, THEN flip for the next tick, so
+        # the sequence starts bright (set by _apply_frame_state) -> dim ->
+        # bright -> dim ...
+        color = self._FRAME_RED_DIM if self._source_blink_phase else self._FRAME_RED_BRIGHT
+        self.sources_box.setStyleSheet(self._frame_qss(color))
+        self._source_blink_phase = not self._source_blink_phase
+
+    def _tick_dest_blink(self) -> None:
+        color = self._FRAME_RED_DIM if self._dest_blink_phase else self._FRAME_RED_BRIGHT
+        self.dest_box.setStyleSheet(self._frame_qss(color))
+        self._dest_blink_phase = not self._dest_blink_phase
 
     # --- Profile CRUD ----------------------------------------------------
 
