@@ -40,8 +40,34 @@ if errorlevel 1 (
 
 echo.
 echo === Cleaning previous build ===
-if exist build rmdir /s /q build
-if exist dist rmdir /s /q dist
+REM rmdir /s /q is silent on failure (files in use, locked exe). Check both
+REM folders are actually gone before carrying on, so PyInstaller never ends
+REM up writing into a half-deleted tree or failing to overwrite a live exe.
+if exist build (
+    rmdir /s /q build
+    if exist build (
+        echo.
+        echo === ERROR ===
+        echo Could not remove the old 'build' folder.
+        echo A file inside may be in use. Close anything that opened it and try again.
+        echo.
+        pause
+        exit /b 1
+    )
+)
+if exist dist (
+    rmdir /s /q dist
+    if exist dist (
+        echo.
+        echo === ERROR ===
+        echo Could not remove the old 'dist' folder.
+        echo Most likely: Anchor.exe is still running, or Explorer has a window
+        echo open inside dist\Anchor\. Close them and run build.bat again.
+        echo.
+        pause
+        exit /b 1
+    )
+)
 
 echo.
 echo === Building Anchor.exe ===
@@ -50,6 +76,18 @@ if errorlevel 1 (
     echo.
     echo === BUILD FAILED ===
     echo See the PyInstaller output above.
+    echo.
+    pause
+    exit /b 1
+)
+
+REM Belt-and-braces: PyInstaller sometimes returns 0 even when the final
+REM write step was skipped (e.g. permission issue). Fail loudly if the exe
+REM isn't where it should be.
+if not exist dist\Anchor\Anchor.exe (
+    echo.
+    echo === BUILD FAILED ===
+    echo PyInstaller reported success but dist\Anchor\Anchor.exe is missing.
     echo.
     pause
     exit /b 1
