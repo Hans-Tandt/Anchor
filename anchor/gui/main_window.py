@@ -298,9 +298,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.phase_strip = PhaseStripWidget()
         progress_row.addWidget(self.phase_strip, 1)
         self.scan_donut = ScanDonutWidget(diameter=72)
+        self.scan_donut.setToolTip(
+            "After Scan finishes, shows the share of source files that "
+            "need copying (changed since the last run) vs unchanged. "
+            "Updates once per run, when the scan completes."
+        )
         donut_col = QtWidgets.QVBoxLayout()
+        donut_col.setSpacing(2)
         donut_col.addStretch(1)
         donut_col.addWidget(self.scan_donut, 0, QtCore.Qt.AlignHCenter)
+        self._donut_caption = QtWidgets.QLabel("to copy")
+        self._donut_caption.setAlignment(QtCore.Qt.AlignHCenter)
+        self._donut_caption.setStyleSheet("color: #8a8578; font-size: 8pt;")
+        self._donut_caption.setToolTip(self.scan_donut.toolTip())
+        donut_col.addWidget(self._donut_caption)
         donut_col.addStretch(1)
         progress_row.addLayout(donut_col)
         dl.addLayout(progress_row)
@@ -974,11 +985,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- scanning / scan-done -----------------------------------
         if phase in ("scanning", "scan-done"):
-            # Classify progress — live donut update: files_skipped = unchanged
-            # so far, (files_done - files_skipped) = to-copy so far.
-            to_copy_so_far = max(0, p.files_done - p.files_skipped)
-            self.scan_donut.set_fractions(to_copy_so_far, p.files_skipped)
-
+            # NOTE: the donut used to update live while classifying files,
+            # but the percentage wobbles wildly before the denominator
+            # settles (first classified file "to copy" → 100%, then the
+            # ratio drops as unchanged files dominate). That's confusing
+            # rather than informative. The donut now stays at its idle
+            # state during scanning and snaps to the resolved ratio at
+            # scan-done, where the value is stable and meaningful.
             if phase == "scanning" and p.files_total > 0:
                 pct = p.files_done * 100.0 / max(1, p.files_total)
                 detail = f"{p.files_done}/{p.files_total}"
@@ -990,7 +1003,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     "scan", "done", 100,
                     f"{p.files_total} files  •  {_human_bytes(p.bytes_total)}",
                 )
-                # Final donut update with the resolved counts.
+                # Final donut update with the resolved counts. Held through
+                # the Copy and Verify phases so the user can still see the
+                # "N% of source files needed backing up" summary at a glance.
                 self.scan_donut.set_fractions(
                     p.files_to_copy, p.files_skipped,
                 )
