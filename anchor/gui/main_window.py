@@ -315,6 +315,11 @@ class MainWindow(QtWidgets.QMainWindow):
         donut_col.addStretch(1)
         progress_row.addLayout(donut_col)
         dl.addLayout(progress_row)
+        # Donut defaults to visible — hide it until a backup run reaches
+        # scan-done, otherwise it's on-screen at app launch with nothing
+        # meaningful to show.
+        self.scan_donut.setVisible(False)
+        self._donut_caption.setVisible(False)
 
         # Confirm-copy button (hidden by default)
         self.confirm_copy_btn = QtWidgets.QPushButton("▶  Start copy")
