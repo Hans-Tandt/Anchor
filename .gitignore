@@ -48,6 +48,13 @@ Desktop.ini
 # Local permission history — regenerates per user, never publish.
 .claude/settings.local.json
 
+# ---- Session-guard local notes (never publish) -----------------------------
+# These live in the project root so Claude's session-guard skill can find
+# them at the conventional location, but they hold personal facts and
+# must never reach the public repo.
+CLAUDE.md
+MEMORY.md
+
 # ---- Personal / backups (belt-and-braces) ----------------------------------
 *.bak
 *.bak-*/
