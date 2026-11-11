@@ -5,6 +5,25 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-11-11
+
+New exclusions UI and new progress UI. Also fixes `run.bat` and hardens `build.bat` so the two script-level traps that caused recent confusion can't bite again silently.
+
+### Added
+- **Exclusions tab is now a preset grid** of 26 common patterns grouped into *System junk*, *Build and cache folders*, *IDE metadata*, and *Version control (⚠ dangerous)*. Each preset has a tooltip. The red VCS warning banner also fires from the new folder-exclusions list.
+- **Specific folders to skip (absolute paths)** — dedicated list below the preset grid, backed by `BackupProfile.exclude_dirs`. Covers the "don't back up this one specific folder" case cleanly.
+- **Custom patterns** — compact textarea kept for globs no preset covers.
+- **Multi-phase progress UI** — Scan / Copy / Verify each get their own mini bar, state icon and duration, plus an overall weighted bar (scan 10 / copy 80 / verify 10). A live 72×72 donut on the right fills as the scan phase classifies files, showing the "to copy" vs "unchanged" ratio in real time.
+- **Confirm before copy** — new per-profile option *Wait for me to confirm before copying*. When on, the engine pauses at the end of the scan phase and the GUI shows a *Start copy — N files, M MB* button instead of auto-proceeding. Cancel still works.
+- **Verify banner** — green auto-dismissing *Verify PASSED* after a passing verify run; red sticky click-to-open-issues *Verify FAILED* banner on fail.
+- **Collapsible log card** on the main window; collapsed state persists in `settings.json` (`log_collapsed`).
+
+### Changed
+- Default `exclude_globs` now holds only file globs (`*.tmp`, `*.log`, `~$*`, `Thumbs.db`, `.DS_Store`); dir basenames (`node_modules`, `__pycache__`, `.venv`) move to the new default `exclude_dirs`. Old profiles with dir basenames in `exclude_globs` still work and are silently migrated on save.
+- Start-of-run VCS WARN now checks both `exclude_globs` and `exclude_dirs` (plus absolute paths ending in a VCS basename), so ticking the new `.git` preset still produces the warning.
+- `run.bat` prefers the `pyw` launcher (no console window) with `py` fallback. Removes the old `pythonw / python` probe that silently fell through to the Microsoft Store Python redirect on fresh Windows machines.
+- `build.bat` verifies that `rmdir /s /q build` and `rmdir /s /q dist` actually removed the folders (silent failure when a file is in use — typically the previously built `Anchor.exe` — was previously invisible). Also verifies the exe ends up at `dist\Anchor\Anchor.exe` before claiming success.
+
 ## [1.3.0] — 2026-11-11
 
 Data-safety fix: Git history was being silently skipped.
