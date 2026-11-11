@@ -234,11 +234,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_btn = QtWidgets.QPushButton("▶  Run backup now"); self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run_backup)
         self.cancel_btn = QtWidgets.QPushButton("■  Cancel")
+        # Use the #danger style so Cancel is visibly the "stop" action (red
+        # border/text) and is easy to spot while a run is live — the other
+        # secondary buttons all look alike when disabled.
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel_backup); self.cancel_btn.setEnabled(False)
         self.verify_btn = QtWidgets.QPushButton("Verify"); self.verify_btn.clicked.connect(self._verify_backup)
         self.verify_btn.setToolTip(
-            "Walk each destination and check every backed-up file against the "
-            "state DB (size always, hash if profile was running in hash-verify mode)."
+            "Verify — walk the DESTINATION and check every backed-up file is "
+            "still there with the expected size (and hash, if the profile uses "
+            "hash verification). Does NOT look at the source — that's Scan's job "
+            "during a backup run. Reports missing or wrong-sized files."
         )
         self.restore_btn = QtWidgets.QPushButton("Restore…"); self.restore_btn.clicked.connect(self._open_restore)
         self.restore_btn.setToolTip(
@@ -443,6 +449,7 @@ class MainWindow(QtWidgets.QMainWindow):
             b.setEnabled(False)
         self.phase_strip.reset(verify_enabled=True)
         self.scan_donut.reset()
+        self.scan_donut.setVisible(False)  # idle: no donut shown
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._set_progress_text("")
@@ -617,6 +624,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.delete_btn.setEnabled(False)
         self.phase_strip.reset(verify_enabled=self.current.verify_after_copy)
         self.scan_donut.reset()
+        self.scan_donut.setVisible(True)  # backup run: donut is meaningful
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -673,6 +681,7 @@ class MainWindow(QtWidgets.QMainWindow):
         any_verify = any(p.verify_after_copy for p in profiles)
         self.phase_strip.reset(verify_enabled=any_verify)
         self.scan_donut.reset()
+        self.scan_donut.setVisible(True)  # group run: donut is meaningful
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -789,8 +798,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.edit_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
         # Standalone Verify: hide scan/copy rows, show only the verify row.
+        # The scan donut is meaningless here (no scan phase) — hide it.
         self.phase_strip.set_verify_only_mode()
         self.scan_donut.reset()
+        self.scan_donut.setVisible(False)
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""

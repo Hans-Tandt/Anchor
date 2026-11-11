@@ -47,6 +47,29 @@ _ROW_BG_RUNNING = "#1f232b"
 _PHASE_ORDER = ("scan", "copy", "verify")
 _PHASE_LABELS = {"scan": "Scan", "copy": "Copy", "verify": "Verify"}
 
+# Tooltips that explain what each phase actually does — Scan and Verify are
+# easy to confuse ("they both walk files"), so each row carries a short
+# explainer on hover.
+_PHASE_TOOLTIPS = {
+    "scan": (
+        "Scan — classifies the SOURCE files.\n"
+        "Walks every file under the source folders and decides which ones "
+        "need copying (changed since the last run) and which can be skipped "
+        "(unchanged, already at the destination according to the state DB)."
+    ),
+    "copy": (
+        "Copy — writes the changed files to the DESTINATION.\n"
+        "Only the files Scan marked 'to copy' are written. Progress tracks "
+        "bytes copied / bytes to copy."
+    ),
+    "verify": (
+        "Verify — walks the DESTINATION to check the backup is intact.\n"
+        "For every file the state DB says should be at the destination, the "
+        "size (and hash, if the profile uses hash verification) is checked. "
+        "Reports missing or wrong-sized files."
+    ),
+}
+
 # Unicode icons for each state (keep pure text so no font files needed).
 _STATE_ICONS = {
     "pending": "○",
@@ -88,6 +111,12 @@ class _PhaseRow(QtWidgets.QFrame):
 
         self.name_lbl = QtWidgets.QLabel(_PHASE_LABELS[phase_key])
         self.name_lbl.setFixedWidth(60)
+        # Explain what this phase actually does on hover — Scan vs Verify
+        # is easy to mix up.
+        tip = _PHASE_TOOLTIPS.get(phase_key, "")
+        if tip:
+            self.name_lbl.setToolTip(tip)
+            self.setToolTip(tip)
         lay.addWidget(self.name_lbl)
 
         self.bar = QtWidgets.QProgressBar()

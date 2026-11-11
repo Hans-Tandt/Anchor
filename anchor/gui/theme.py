@@ -83,17 +83,32 @@ def _qss(c: dict) -> str:
         padding: 7px 14px;
     }}
     QPushButton:hover {{ background: {c['border']}; }}
-    QPushButton:disabled {{ color: {c['text_muted']}; }}
+    QPushButton:disabled {{
+        color: {c['text_muted']};
+        background: transparent;
+        border: 1px dashed {c['border']};
+    }}
     QPushButton#primary {{
         background: {c['accent']}; color: {c['accent_text']};
         border: none; font-weight: 600;
     }}
     QPushButton#primary:hover {{ background: {c['accent_hover']}; }}
+    /* Disabled primary must NOT keep the gold background — otherwise the
+       user can't tell it's disabled during a run. */
+    QPushButton#primary:disabled {{
+        background: {c['panel_alt']};
+        color: {c['text_muted']};
+        font-weight: normal;
+    }}
     QPushButton#danger {{
         background: transparent; color: {c['err']};
         border: 1px solid {c['err']};
     }}
     QPushButton#danger:hover {{ background: {c['err']}; color: {c['accent_text']}; }}
+    QPushButton#danger:disabled {{
+        color: {c['text_muted']};
+        border: 1px dashed {c['border']};
+    }}
 
     QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {{
         background: {c['input_bg']};
