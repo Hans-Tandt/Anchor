@@ -479,7 +479,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dest_box.setStyleSheet(self._frame_qss(self._FRAME_NEUTRAL))
         self.phase_strip.reset(verify_enabled=True)
         self.scan_donut.reset()
-        self.scan_donut.setVisible(False)  # idle: no donut shown
+        self._show_scan_donut(False)  # idle: no donut shown
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._set_progress_text("")
@@ -728,7 +728,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.delete_btn.setEnabled(False)
         self.phase_strip.reset(verify_enabled=self.current.verify_after_copy)
         self.scan_donut.reset()
-        self.scan_donut.setVisible(True)  # backup run: donut is meaningful
+        # Keep the donut (and its caption) hidden until the scan finishes
+        # and has real numbers to show — during the Scan phase it would
+        # just sit at '—' with nothing meaningful to say.
+        self._show_scan_donut(False)
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -785,7 +788,7 @@ class MainWindow(QtWidgets.QMainWindow):
         any_verify = any(p.verify_after_copy for p in profiles)
         self.phase_strip.reset(verify_enabled=any_verify)
         self.scan_donut.reset()
-        self.scan_donut.setVisible(True)  # group run: donut is meaningful
+        self._show_scan_donut(False)  # revealed at scan-done, per profile
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -905,7 +908,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # The scan donut is meaningless here (no scan phase) — hide it.
         self.phase_strip.set_verify_only_mode()
         self.scan_donut.reset()
-        self.scan_donut.setVisible(False)
+        self._show_scan_donut(False)
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -1003,12 +1006,15 @@ class MainWindow(QtWidgets.QMainWindow):
                     "scan", "done", 100,
                     f"{p.files_total} files  •  {_human_bytes(p.bytes_total)}",
                 )
-                # Final donut update with the resolved counts. Held through
-                # the Copy and Verify phases so the user can still see the
-                # "N% of source files needed backing up" summary at a glance.
+                # Final donut update with the resolved counts, and REVEAL it
+                # now (it was hidden up to this point since there was nothing
+                # meaningful to show). Held through the Copy and Verify
+                # phases so the user can still see the "N% of source files
+                # needed backing up" summary at a glance.
                 self.scan_donut.set_fractions(
                     p.files_to_copy, p.files_skipped,
                 )
+                self._show_scan_donut(True)
                 # Show the confirm button if the profile asked for it.
                 if self.current and getattr(
                     self.current, "confirm_before_copy", False,
@@ -1125,6 +1131,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.confirm_start_copy()
         if self.group_worker:
             self.group_worker.confirm_start_copy()
+
+    def _show_scan_donut(self, visible: bool) -> None:
+        """Toggle the scan donut AND its caption together, so they appear/
+        disappear as a single unit. The donut is only meaningful from the
+        scan-done phase onwards within a Backup run."""
+        self.scan_donut.setVisible(visible)
+        self._donut_caption.setVisible(visible)
 
     def _set_progress_text(self, text: str) -> None:
         """Set progress_label text without letting it widen/grow the window.
