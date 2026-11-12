@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Hans-Tandt/Anchor" alt="License: MIT"></a>
-  <a href="https://github.com/Hans-Tandt/Anchor/releases"><img src="https://img.shields.io/github/v/release/Hans-Tandt/Anchor?include_prereleases" alt="Latest release"></a>
+  <a href="https://hanstandt.be/projects/anchor/"><img src="https://img.shields.io/badge/version-1.4.1-blue" alt="Version 1.4.1"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue" alt="Windows 10 / 11">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
 </p>
@@ -44,7 +44,12 @@ Set it up once, schedule it, and forget it. Or run it by hand from a friendly GU
 
 ## Download
 
-Grab the latest release from the [Releases page](https://github.com/Hans-Tandt/Anchor/releases/latest).
+The latest version (1.4.1), with its SHA-256 checksum, is on the project page:
+<https://hanstandt.be/projects/anchor/>. The old 1.2.0 release on GitHub is out of date.
+
+**Coming from 1.2.0?** That version skipped `.git` folders by default, so the history of Git
+repositories was not backed up. Open each profile, go to **Edit > Exclusions** and remove the `.git`
+line; the next run copies the missing history once.
 
 Because the download is not code-signed, Windows SmartScreen will show a blue warning when you first run it. Click **More info** → **Run anyway**. If that makes you uncomfortable, run from source instead (see below).
 
