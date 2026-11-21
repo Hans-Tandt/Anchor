@@ -1,10 +1,10 @@
 @echo off
-REM Build Anchor.exe using PyInstaller.
+REM Build Anchor.exe using PyInstaller. Run from anywhere; works from the repo root.
 REM Output: dist\Anchor\Anchor.exe (with dist\Anchor\_internal\ beside it).
 REM Requires: pip install pyinstaller (installed automatically on first run).
 
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 REM Use the Python launcher `py` instead of `python` so we never hit the
 REM Microsoft Store `python` redirector sitting at the top of PATH on Win 10/11.
@@ -71,7 +71,7 @@ if exist dist (
 
 echo.
 echo === Building Anchor.exe ===
-%PY% -m PyInstaller --noconfirm Anchor.spec
+%PY% -m PyInstaller --noconfirm packaging\Anchor.spec
 if errorlevel 1 (
     echo.
     echo === BUILD FAILED ===

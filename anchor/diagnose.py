@@ -2,12 +2,12 @@
 
 Two modes:
 
-    python diagnose.py
+    python -m anchor.diagnose
         Print resolved paths, settings, profiles, destinations, and the
         row count in each per-profile state DB. Use when something feels
         off — wrong logs location, profile that won't load, etc.
 
-    python diagnose.py --check "C:\\path\\to\\some\\source\\file.jpg"
+    python -m anchor.diagnose --check "C:\\path\\to\\some\\source\\file.jpg"
         Tell me, for every profile that covers this file, exactly what the
         engine would decide for it (excluded? new? unchanged? would be
         adopted?). Use this to answer "why didn't my file get copied?".
@@ -22,7 +22,8 @@ import sys
 import traceback
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Also runnable as a plain script: `python anchor/diagnose.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _print_dir(label: str, p: Path) -> None:
@@ -52,7 +53,7 @@ def _print_dir(label: str, p: Path) -> None:
 def _check_one_file(file_path: str) -> int:
     """For each profile, explain what would happen to `file_path`."""
     print("=" * 72)
-    print(f"ANCHOR DIAGNOSTIC — check single file")
+    print("ANCHOR DIAGNOSTIC — check single file")
     print("=" * 72)
     abs_p = os.path.abspath(file_path)
     print(f"File:        {abs_p}")
@@ -115,12 +116,12 @@ def _check_one_file(file_path: str) -> int:
             print(f"  ⚠ EXCLUDED by pattern: {excluded}")
             print("  -> Engine would NOT see this file at all. Edit exclusions to include it.")
             continue
-        print(f"  Excluded:       no")
+        print("  Excluded:       no")
 
         # Per-destination decision
         state_path = STATE_DIR / f"{prof.id}.sqlite"
         if not state_path.exists():
-            print(f"  State DB:       MISSING — every file would be 'new' (copied).")
+            print("  State DB:       MISSING — every file would be 'new' (copied).")
             continue
         try:
             con = sqlite3.connect(state_path)
@@ -136,7 +137,7 @@ def _check_one_file(file_path: str) -> int:
                 (d.id, sub, rel),
             ).fetchone()
             if row is None:
-                print(f"    state DB:      no row for this (sub,rel)")
+                print("    state DB:      no row for this (sub,rel)")
                 # Probe the destination to predict adopt vs new
                 try:
                     dest = open_destination(d, preserve_metadata=prof.preserve_metadata)
@@ -167,13 +168,13 @@ def _check_one_file(file_path: str) -> int:
                 print(f"    state DB row:  size={known_size}, mtime={_fmt_ts(known_mtime)}, sha={known_sha or '-'}")
                 print(f"    backed up at:  {backed_up_at}")
                 if known_size != st.st_size:
-                    print(f"    DECISION:      SIZE-CHANGED — would copy.")
+                    print("    DECISION:      SIZE-CHANGED — would copy.")
                 elif abs((known_mtime or 0) - st.st_mtime) > 2:
-                    print(f"    DECISION:      MTIME-CHANGED — would copy.")
+                    print("    DECISION:      MTIME-CHANGED — would copy.")
                 elif prof.verify_with_hash and not known_sha:
-                    print(f"    DECISION:      HASH-MODE FLIP — would copy (state has no hash yet).")
+                    print("    DECISION:      HASH-MODE FLIP — would copy (state has no hash yet).")
                 else:
-                    print(f"    DECISION:      UP-TO-DATE — would SKIP.")
+                    print("    DECISION:      UP-TO-DATE — would SKIP.")
         con.close()
         print()
 
