@@ -73,4 +73,4 @@ body:
     id: extra
     attributes:
       label: Anything else?
-      description: Screenshots, `diagnose.py --check <path>` output, related issues, etc.
+      description: Screenshots, `python -m anchor.diagnose --check <path>` output, related issues, etc.
