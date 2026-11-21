@@ -5,6 +5,19 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.4.2] — 2026-11-21
+
+The progress pie now shows how far the copy has got.
+
+### Changed
+- **Pie shows copy progress.** When the scan ends, the data that has to be copied is the 100% mark and the pie starts at 0%. The gold ring fills as data is copied (by bytes; by file count when there is nothing to measure in bytes). Previously the pie showed the share of source files that changed, which mostly sat at a few percent and said little during the run.
+- **End-of-run state on the pie:** green ring blinking for 10 seconds with "Finished" in the middle, then solid green; red "Issues" when files failed or verify found problems; red "Error" when the run aborted; amber "Stopped" when cancelled, with the ring left where the copy stopped.
+- **Legend under the pie** now reads `done N files · size` and `left N files · size`.
+- The pie is hidden while scanning, at app launch and during a standalone Verify, and again when the next destination or profile starts scanning.
+
+### Fixed
+- The pie's centre is now see-through instead of painted dark, so it looks right in the light theme. Legend text follows the theme colours.
+
 ## [1.4.1] — 2026-11-11
 
 Feedback-driven polish of the 1.4.0 progress UI, plus a theme fix.
