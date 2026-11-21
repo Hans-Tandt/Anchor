@@ -28,7 +28,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core.profile import BackupProfile, DestinationConfig
 from ..destinations import open_destination
-from ..destinations.base import Destination, DestinationError, FileVersion
+from ..core.walker import source_label
+from . import icons
+from ..destinations.base import Destination, DestinationError, FileVersion, safe_local_target
 
 
 # Sentinel for "current file at destination" (i.e., not a specific archived
@@ -169,6 +171,11 @@ class RestoreDialog(QtWidgets.QDialog):
         bot.addStretch(1)
         bot.addWidget(self.close_btn)
         root.addLayout(bot)
+        self.restore_original_btn.setObjectName("primary")
+        icons.bind_icon(self.restore_original_btn, "restore", "accent_text")
+        icons.bind_icon(self.restore_alt_btn, "folder-open")
+        icons.bind_icon(self.cancel_btn, "stop")
+        icons.bind_icon(reload_btn, "refresh")
 
         self.status_label = QtWidgets.QLabel("")
         self.status_label.setObjectName("muted")
@@ -222,8 +229,6 @@ class RestoreDialog(QtWidgets.QDialog):
         """Group files into a tree by forward-slash separators."""
         # Build a nested dict of path components, sorted by name for stability.
         root_map: Dict[str, dict] = {}
-        sizes: Dict[str, int] = {}
-        mtimes: Dict[str, Optional[float]] = {}
         # We'll fetch size/mtime only for shown files when the user expands —
         # but for a small file count we can stat eagerly. Keep it lazy here
         # to keep the dialog fast on huge destinations.
@@ -234,26 +239,33 @@ class RestoreDialog(QtWidgets.QDialog):
                 cur = cur.setdefault(p, {})
             cur.setdefault("__files__", []).append(parts[-1])
 
+        folder_ic = icons.icon("folder", "accent")
+        file_ic = icons.icon("files", "text_muted")
+
         def _add(parent: QtWidgets.QTreeWidgetItem, node: dict, prefix: str) -> None:
             # Subdirectories first (sorted)
             for name in sorted(k for k in node if k != "__files__"):
-                child = QtWidgets.QTreeWidgetItem(parent, [name + "/"])
+                child = QtWidgets.QTreeWidgetItem(parent, [name])
+                child.setIcon(0, folder_ic)
                 child.setData(0, QtCore.Qt.UserRole, None)  # folder marker
                 _add(child, node[name], f"{prefix}{name}/")
             for fname in sorted(node.get("__files__", [])):
                 full_rel = f"{prefix}{fname}"
                 it = QtWidgets.QTreeWidgetItem(parent, [fname, "", ""])
+                it.setIcon(0, file_ic)
                 it.setData(0, QtCore.Qt.UserRole, full_rel)
                 # Lazily fill size/mtime when the row scrolls into view? Simpler:
                 # fill on demand when selected (avoids 1000s of stats at load).
 
         # Top level
         for name in sorted(k for k in root_map if k != "__files__"):
-            top = QtWidgets.QTreeWidgetItem(self.tree, [name + "/"])
+            top = QtWidgets.QTreeWidgetItem(self.tree, [name])
+            top.setIcon(0, folder_ic)
             top.setData(0, QtCore.Qt.UserRole, None)
             _add(top, root_map[name], f"{name}/")
         for fname in sorted(root_map.get("__files__", [])):
             it = QtWidgets.QTreeWidgetItem(self.tree, [fname, "", ""])
+            it.setIcon(0, file_ic)
             it.setData(0, QtCore.Qt.UserRole, fname)
 
     # --- Selection / versions list --------------------------------------
@@ -344,17 +356,28 @@ class RestoreDialog(QtWidgets.QDialog):
             # so users get back a sensible local tree (e.g. "Documents/file.txt"
             # not "C__Users_<you>_Documents/file.txt"). Best-effort: if the rel
             # path has no slash, keep it as-is.
-            tail = rel.split("/", 1)[1] if "/" in rel else rel
-            target = os.path.join(target_dir, tail.replace("/", os.sep))
+            if self.profile.flat_destination_layout:
+                tail = rel
+            else:
+                tail = rel.split("/", 1)[1] if "/" in rel else rel
+            try:
+                # Refuses "..", absolute paths, drive letters… so a hostile or
+                # corrupted destination listing can't write outside the
+                # folder the user picked.
+                target = safe_local_target(target_dir, tail)
+            except DestinationError as e:
+                QtWidgets.QMessageBox.warning(self, "Unsafe path", str(e))
+                return
         else:
             # Reconstruct the original absolute path from the sub-label:
             # "C__Users_<you>_Docs/foo/bar.txt" -> "C:\Users\<you>\Docs\foo\bar.txt"
-            target = _reconstruct_original_path(rel)
+            target = _original_target(self.profile, rel)
             if not target:
                 QtWidgets.QMessageBox.warning(
-                    self, "Cannot reconstruct original path",
-                    "The destination layout doesn't carry enough info to know "
-                    "where this file originally lived. Use 'Restore to folder…' instead.",
+                    self, "Original location unknown",
+                    "This file doesn't belong to any of the profile's current source "
+                    "folders, so Anchor can't tell where it came from. Use "
+                    "'Restore to folder…' instead.",
                 )
                 return
             ok = QtWidgets.QMessageBox.question(
@@ -410,16 +433,28 @@ class RestoreDialog(QtWidgets.QDialog):
 
     # --- Cleanup --------------------------------------------------------
 
-    def closeEvent(self, ev: QtGui.QCloseEvent) -> None:
-        if self._worker and self._worker.isRunning():
+    def done(self, result: int) -> None:  # noqa: D401 - Qt API
+        # Close (accept), Esc (reject) and the title-bar X all end up here.
+        # The old closeEvent missed the first two, leaking the remote
+        # connection and letting a running restore thread be destroyed.
+        if self._worker is not None and self._worker.isRunning():
+            if QtWidgets.QMessageBox.question(
+                self, "Restore in progress", "Stop the restore and close?",
+            ) != QtWidgets.QMessageBox.Yes:
+                return
             self._worker.request_cancel()
-            self._worker.wait(3000)
+            if not self._worker.wait(15000):
+                QtWidgets.QMessageBox.warning(
+                    self, "Still stopping",
+                    "The current file is still being written. Try again in a moment.")
+                return
         if self.dest is not None:
             try:
                 self.dest.close()
             except Exception:
                 pass
-        super().closeEvent(ev)
+            self.dest = None
+        super().done(result)
 
 
 # --- Helpers -----------------------------------------------------------------
@@ -441,24 +476,34 @@ def _format_version_id(vid: str) -> str:
         return vid
 
 
-def _reconstruct_original_path(rel: str) -> Optional[str]:
-    """Best-effort inverse of walker.source_label().
+def _original_target(profile: BackupProfile, rel: str) -> Optional[str]:
+    r"""Map a destination rel path back to where the file lives on this PC.
 
-    Sub-label conventions from walker.source_label():
-       "C:\\Users\\<you>\\Docs"   -> "C__Users_<you>_Docs"
-       "\\\\NAS\\share\\stuff"    -> "UNC_NAS_share_stuff"
-    Everything after the first "/" in `rel` is the file's path relative to
-    that root. We try to reverse the encoding well enough that the round-trip
-    works for typical Windows paths.
+    Matches the sub-label against the profile's own source folders (exact)
+    instead of reversing the label string: the old reverse turned every "_"
+    into a path separator, so C:\My_Docs\a.txt was restored to C:\My\Docs\a.txt.
+    The result is confined to the source folder. None = no source matches.
     """
-    if "/" not in rel:
+    sources = [s for s in profile.sources if s]
+
+    def norm(s: str) -> str:
+        return s if s.startswith("\\\\") else os.path.abspath(s)
+
+    if profile.flat_destination_layout:
+        if len(sources) != 1:
+            return None
+        base, tail = norm(sources[0]), rel
+    else:
+        if "/" not in rel:
+            return None
+        sub, tail = rel.split("/", 1)
+        base = next((norm(s) for s in sources if source_label(norm(s)) == sub), None)
+        if base is None:
+            return None
+    if os.path.isfile(base) or (not os.path.isdir(base) and tail == os.path.basename(base)):
+        # Single-file source: stored as <sub>/<basename>.
+        return base if tail == os.path.basename(base) else None
+    try:
+        return safe_local_target(base, tail)
+    except DestinationError:
         return None
-    sub, tail = rel.split("/", 1)
-    if sub.startswith("UNC_"):
-        # "UNC_NAS_share_stuff" -> "\\NAS\share\stuff"
-        return ("\\\\" + sub[4:].replace("_", "\\") + "\\"
-                + tail.replace("/", "\\"))
-    # Windows drive form: "C__Users_..." -> "C:\Users\..."
-    if len(sub) >= 3 and sub[1:3] == "__":
-        return sub[0] + ":\\" + sub[3:].replace("_", "\\") + "\\" + tail.replace("/", "\\")
-    return None

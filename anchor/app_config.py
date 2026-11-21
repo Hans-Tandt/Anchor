@@ -128,7 +128,7 @@ def atomic_write_text(path: Path, text: str) -> None:
 class AppSettings:
     """Global app preferences (persisted to settings.json)."""
 
-    theme: str = "dark"  # "dark" | "light"
+    theme: str = "dark"  # "dark" | "light" | "system"
     verify_with_hash: bool = False  # True = SHA-256 check; False = mtime+size only
     parallel_workers: int = 4
     auto_run_on_drive_plug_in: bool = False
@@ -140,6 +140,11 @@ class AppSettings:
     # Main-window log card collapsed state. Persists across sessions so the
     # user doesn't have to re-collapse it every launch.
     log_collapsed: bool = False
+    # Desktop notification (tray balloon) when a run finishes while the
+    # window is not focused.
+    notifications: bool = True
+    # Navigation rail expanded (labels visible) or compact (icons only).
+    nav_expanded: bool = True
     # SFTP/WebDAV stored credentials are *per profile*, not here.
 
     @classmethod

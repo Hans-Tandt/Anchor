@@ -72,9 +72,10 @@ class ScheduleDialog(QtWidgets.QDialog):
             self.freq.setCurrentIndex(2)
         elif "week" in s.lower() or any(d in s.upper() for d in DAYS):
             self.freq.setCurrentIndex(1)
+            # Start from a clean slate: MON is pre-ticked as the default for a
+            # new schedule, which made it re-appear on every edit.
             for d in DAYS:
-                if d in s.upper():
-                    self.day_checks[d].setChecked(True)
+                self.day_checks[d].setChecked(d in s.upper())
         else:
             self.freq.setCurrentIndex(0)
         # crude HH:MM extraction
@@ -112,7 +113,10 @@ class ScheduleDialog(QtWidgets.QDialog):
 
     def _accept(self) -> None:
         if not self.enable_chk.isChecked():
-            err = scheduler.delete(self.profile.id)
+            err = scheduler.delete(self.profile.id) if self.profile.schedule_enabled else None
+            if err:
+                QtWidgets.QMessageBox.warning(self, "Couldn't remove schedule", err)
+                return
             self.profile.schedule_enabled = False
             self.profile.schedule_cron = ""
             save_profile(self.profile)

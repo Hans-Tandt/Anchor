@@ -1,60 +1,38 @@
-"""Custom widgets for the multi-phase backup progress UI.
+"""Widgets for the multi-phase backup progress UI.
 
-Three widgets live here so main_window.py does not balloon:
+- PhaseStripWidget — Scan / Copy / Verify rows (state icon, name, thin bar,
+  detail text) plus an overall bar. The running row is highlighted and its bar
+  pulses so the eye finds the active phase.
+- CopyProgressDonut — ring chart of the copy work. The scan decides the total
+  (100%); the arc fills as files are written; at the end the ring shows
+  Finished (green, gently pulsing), Issues (red) or Stopped (amber).
+- VerifyBanner — Fluent InfoBar shown after a verify-enabled run. Success
+  auto-dismisses after 10 s; failure is sticky and clicking it opens the
+  issues dialog.
 
-- PhaseStripWidget
-    Three mini rows (Scan / Copy / Verify). Each row shows an icon reflecting
-    the phase state (pending / running / done / issue), the phase name, a thin
-    bar for that phase's progress, and a right-aligned detail string (duration,
-    live counts, etc.). The row for the currently-running phase is highlighted.
-
-- CopyProgressDonut
-    An 84x84 ring that shows the copy work of the current run. The scan sets
-    the total (100%); the gold arc fills as files are copied. At the end it
-    blinks green with "Finished", or turns red ("Issues") / amber ("Stopped").
-
-- VerifyBanner
-    A stylised banner shown under the progress area after a run finishes. Green
-    for pass (auto-dismisses after 10 s), red for fail (sticky, clicking it
-    opens the issues dialog).
+All colours come from the theme tokens, so the widgets read correctly in both
+the dark and the light theme.
 """
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import icons
+from .theme import color, theme_manager
+from .widgets import SmoothProgressBar
 
-# TechEase palette tokens — matched to anchor/gui/theme.py's DARK dict but kept
-# constant here so the widgets look the same in both themes (the overall UI's
-# background already changes with the theme, which gives enough contrast).
-_ACCENT = "#d4a85a"       # gold — the "needs copy" slice / running row
-_ACCENT_DIM = "#8a6f3d"
-_MUTED = "#4a4a4a"
-_TEXT = "#ece6d8"
-_TEXT_DIM = "#8a8578"
-_OK = "#5fb88a"
-_WARN = "#e9a23b"
-_ERR = "#e35d6a"
-_ROW_BG_RUNNING = "#1f232b"
-
-
-# ---------------------------------------------------------------------------
-# Phase strip
-# ---------------------------------------------------------------------------
 
 _PHASE_ORDER = ("scan", "copy", "verify")
 _PHASE_LABELS = {"scan": "Scan", "copy": "Copy", "verify": "Verify"}
+_PHASE_ICONS = {"scan": "search", "copy": "files", "verify": "shield"}
 
-# Tooltips that explain what each phase actually does — Scan and Verify are
-# easy to confuse ("they both walk files"), so each row carries a short
-# explainer on hover.
 _PHASE_TOOLTIPS = {
     "scan": (
         "Scan — classifies the SOURCE files.\n"
         "Walks every file under the source folders and decides which ones "
-        "need copying (changed since the last run) and which can be skipped "
-        "(unchanged, already at the destination according to the state DB)."
+        "need copying (changed since the last run) and which can be skipped."
     ),
     "copy": (
         "Copy — writes the changed files to the DESTINATION.\n"
@@ -62,180 +40,146 @@ _PHASE_TOOLTIPS = {
         "bytes copied / bytes to copy."
     ),
     "verify": (
-        "Verify — walks the DESTINATION to check the backup is intact.\n"
-        "For every file the state DB says should be at the destination, the "
-        "size (and hash, if the profile uses hash verification) is checked. "
-        "Reports missing or wrong-sized files."
+        "Verify — checks the backup is intact.\n"
+        "For every file that should be at the destination, the size (and "
+        "hash, if the profile uses hash verification) is checked."
     ),
 }
 
-# Unicode icons for each state (keep pure text so no font files needed).
-_STATE_ICONS = {
-    "pending": "○",
-    "running": "▶",
-    "done":    "✓",
-    "issue":   "⚠",
-}
-_STATE_COLORS = {
-    "pending": _TEXT_DIM,
-    "running": _ACCENT,
-    "done":    _OK,
-    "issue":   _WARN,
-}
+_STATE_COLOR = {"pending": "text_muted", "running": "accent", "done": "ok", "issue": "warn"}
+_STATE_ICON = {"pending": None, "running": None, "done": "check-circle", "issue": "warning"}
 
 
 class _PhaseRow(QtWidgets.QFrame):
-    """Single row of the PhaseStripWidget.
-
-    Layout: [icon] [phase name] [thin progress bar] [detail text].
-    The whole row gets a subtle background highlight while running.
-    """
-
     def __init__(self, phase_key: str, parent=None):
         super().__init__(parent)
         self.phase_key = phase_key
         self.setObjectName(f"phaseRow_{phase_key}")
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.setToolTip(_PHASE_TOOLTIPS.get(phase_key, ""))
 
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setContentsMargins(10, 6, 10, 6)
         lay.setSpacing(10)
 
-        self.icon_lbl = QtWidgets.QLabel(_STATE_ICONS["pending"])
-        self.icon_lbl.setFixedWidth(18)
-        self.icon_lbl.setAlignment(QtCore.Qt.AlignCenter)
-        f = self.icon_lbl.font(); f.setPointSize(11); f.setBold(True)
-        self.icon_lbl.setFont(f)
+        self.icon_lbl = QtWidgets.QLabel()
+        self.icon_lbl.setFixedSize(18, 18)
         lay.addWidget(self.icon_lbl)
 
         self.name_lbl = QtWidgets.QLabel(_PHASE_LABELS[phase_key])
-        self.name_lbl.setFixedWidth(60)
-        # Explain what this phase actually does on hover — Scan vs Verify
-        # is easy to mix up.
-        tip = _PHASE_TOOLTIPS.get(phase_key, "")
-        if tip:
-            self.name_lbl.setToolTip(tip)
-            self.setToolTip(tip)
+        self.name_lbl.setFixedWidth(52)
         lay.addWidget(self.name_lbl)
 
-        self.bar = QtWidgets.QProgressBar()
-        self.bar.setRange(0, 100)
-        self.bar.setValue(0)
-        self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(10)
-        self.bar.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed,
-        )
+        self.bar = SmoothProgressBar(height=4)
+        self.bar.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         lay.addWidget(self.bar, 1)
 
         self.detail_lbl = QtWidgets.QLabel("")
-        self.detail_lbl.setMinimumWidth(140)
-        self.detail_lbl.setAlignment(
-            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-        )
+        self.detail_lbl.setObjectName("caption")
+        self.detail_lbl.setMinimumWidth(170)
+        self.detail_lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         lay.addWidget(self.detail_lbl)
 
-        # The bar of the running phase blinks (bright / dim gold) so the eye
-        # finds the active phase at once.
         self._state = "pending"
-        self._blink_on = True
-        self._applied = None  # (state, blink_on) last written to the stylesheet
-        self._blink = QtCore.QTimer(self)
-        self._blink.setInterval(500)
-        self._blink.timeout.connect(self._tick_blink)
+        self._pct = 0.0
+        self._pulse_on = True
+        self._pulse = QtCore.QTimer(self)
+        self._pulse.setInterval(600)
+        self._pulse.timeout.connect(self._tick)
+        self._applied = None
+        theme_manager.changed.connect(lambda: self._apply(force=True))
+        self._apply(force=True)
 
-        self._apply_state("pending")
+    def value_pct(self) -> float:
+        return self._pct
 
     def set_state(self, state: str, progress_pct: float = 0.0, detail: str = "") -> None:
-        if state not in _STATE_ICONS:
+        if state not in _STATE_COLOR:
             state = "pending"
         self._state = state
         if state == "running":
-            # Progress events arrive ~10x per second: only start the timer
-            # once, or it would never get to tick.
-            if not self._blink.isActive():
-                self._blink_on = True
-                self._blink.start()
+            if not self._pulse.isActive():
+                self._pulse_on = True
+                self._pulse.start()
         else:
-            self._blink.stop()
-            self._blink_on = True
-        self._apply_state(state)
-        self.bar.setRange(0, 100)
-        self.bar.setValue(max(0, min(100, int(round(progress_pct)))))
-        if state in ("done", "issue"):
-            self.bar.setValue(100)
+            self._pulse.stop()
+            self._pulse_on = True
+        pct = 100.0 if state in ("done", "issue") else max(0.0, min(100.0, progress_pct))
+        self._pct = pct
+        self.bar.set_fraction(pct / 100.0, animate=state == "running")
         self.detail_lbl.setText(detail)
+        self._apply()
 
-    def _tick_blink(self) -> None:
+    def _tick(self) -> None:
         if self._state != "running":
-            self._blink.stop()
+            self._pulse.stop()
             return
-        self._blink_on = not self._blink_on
-        self._apply_state(self._state)
+        self._pulse_on = not self._pulse_on
+        self._apply()
 
-    def _apply_state(self, state: str) -> None:
-        # Re-writing a stylesheet re-polishes the whole row; skip it when
-        # nothing visible changed (set_state runs on every progress event).
-        key = (state, self._blink_on)
-        if key == self._applied:
+    def _apply(self, force: bool = False) -> None:
+        key = (self._state, self._pulse_on, theme_manager.is_dark)
+        if key == self._applied and not force:
             return
         self._applied = key
-        self.icon_lbl.setText(_STATE_ICONS[state])
-        color = _STATE_COLORS[state]
-        self.icon_lbl.setStyleSheet(f"color: {color};")
-        bar_color = color if (state != "running" or self._blink_on) else _ACCENT_DIM
-        # Highlight the row's background while running so the eye jumps to it.
-        bg = _ROW_BG_RUNNING if state == "running" else "transparent"
+        st = self._state
+        ck = _STATE_COLOR[st]
+        ic = _STATE_ICON[st] or _PHASE_ICONS[self.phase_key]
+        self.icon_lbl.setPixmap(icons.pixmap(ic, 16, ck))
+        bar_key = ck if (st != "running" or self._pulse_on) else "accent_pressed"
+        self.bar.set_chunk_color(bar_key)
+        running = st == "running"
+        bg = color("accent_soft") if running else QtGui.QColor(0, 0, 0, 0)
         self.setStyleSheet(
-            f"QFrame#phaseRow_{self.phase_key} {{"
-            f" background: {bg}; border-radius: 4px; }}"
-            # Make the thin bar match the state colour (gold while running,
-            # green when done, orange on issue, muted when pending).
-            f" QProgressBar::chunk {{ background: {bar_color}; border-radius: 2px; }}"
-            f" QProgressBar {{ background: {_MUTED}; border: none; border-radius: 2px; }}"
+            f"QFrame#phaseRow_{self.phase_key} {{ background: rgba({bg.red()},{bg.green()},"
+            f"{bg.blue()},{bg.alphaF():.2f}); border-radius: 6px; }}"
         )
         self.name_lbl.setStyleSheet(
-            f"color: {_TEXT if state == 'running' else _TEXT_DIM};"
-            f" font-weight: {'600' if state == 'running' else 'normal'};"
+            f"color: {color('text' if st != 'pending' else 'text_muted').name()};"
+            f" font-weight: {'600' if running else 'normal'};"
         )
 
 
 class PhaseStripWidget(QtWidgets.QFrame):
-    """The three stacked phase rows, plus the overall progress bar.
+    """Three phase rows plus a weighted overall bar
+    (Scan 10%, Copy 80%, Verify 10%; or 10/90 without Verify)."""
 
-    The overall bar is weighted: Scan contributes 10%, Copy 80%, Verify 10%.
-    When Verify is disabled for the profile, Scan contributes 10% and Copy
-    contributes the remaining 90%.
-    """
-
-    # Weights for the overall bar. Tuned by rough wall-clock ratios: scan
-    # is cheap (stat-based), copy is the real I/O, verify is a re-walk.
     _W_WITH_VERIFY = {"scan": 0.10, "copy": 0.80, "verify": 0.10}
     _W_WITHOUT_VERIFY = {"scan": 0.10, "copy": 0.90, "verify": 0.0}
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("phaseStrip")
         v = QtWidgets.QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(2)
-
         self.rows = {k: _PhaseRow(k) for k in _PHASE_ORDER}
         for k in _PHASE_ORDER:
             v.addWidget(self.rows[k])
 
-        # Overall bar — larger, below the three phase rows.
-        self.overall = QtWidgets.QProgressBar()
-        self.overall.setRange(0, 100)
-        self.overall.setValue(0)
-        self.overall.setFixedHeight(16)
-        self.overall.setFormat("Overall  %p%")
-        self.overall.setAlignment(QtCore.Qt.AlignCenter)
-        v.addSpacing(4)
-        v.addWidget(self.overall)
+        v.addSpacing(8)
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(10, 0, 10, 0)
+        self.overall_lbl = QtWidgets.QLabel("Overall")
+        self.overall_lbl.setObjectName("caption")
+        self.overall_pct = QtWidgets.QLabel("0%")
+        self.overall_pct.setObjectName("caption")
+        head.addWidget(self.overall_lbl)
+        head.addStretch(1)
+        head.addWidget(self.overall_pct)
+        v.addLayout(head)
+        self.overall = SmoothProgressBar(height=6)
+        wrap = QtWidgets.QHBoxLayout()
+        wrap.setContentsMargins(10, 2, 10, 0)
+        wrap.addWidget(self.overall)
+        v.addLayout(wrap)
+        theme_manager.changed.connect(lambda: self.overall.set_chunk_color("accent"))
+        self.overall.set_chunk_color("accent")
 
         self._verify_enabled = True
         self._verify_only = False
+
+    def overall_value(self) -> int:
+        return int(round(self.overall.value() / 10))
 
     def reset(self, verify_enabled: bool = True) -> None:
         self._verify_only = False
@@ -244,27 +188,18 @@ class PhaseStripWidget(QtWidgets.QFrame):
             self.rows[key].setVisible(True)
             self.rows[key].set_state("pending", 0, "")
         self.rows["verify"].setVisible(verify_enabled)
-        self.overall.setValue(0)
+        self._set_overall(0, animate=False)
 
     def set_verify_only_mode(self) -> None:
-        """Show only the verify row (for a standalone Verify run). The
-        overall bar then tracks verify progress alone."""
         self._verify_only = True
         self._verify_enabled = True
         self.rows["scan"].setVisible(False)
         self.rows["copy"].setVisible(False)
         self.rows["verify"].setVisible(True)
         self.rows["verify"].set_state("pending", 0, "")
-        self.overall.setValue(0)
+        self._set_overall(0, animate=False)
 
-    def set_phase(
-        self,
-        phase_key: str,
-        state: str,
-        progress_pct: float = 0.0,
-        detail: str = "",
-    ) -> None:
-        """Set one phase's row and recompute the overall bar."""
+    def set_phase(self, phase_key: str, state: str, progress_pct: float = 0.0, detail: str = "") -> None:
         if phase_key in self.rows:
             self.rows[phase_key].set_state(state, progress_pct, detail)
         self._recompute_overall()
@@ -279,214 +214,198 @@ class PhaseStripWidget(QtWidgets.QFrame):
             self.rows[phase_key].set_state("pending", 0, "")
         self._recompute_overall()
 
+    def _set_overall(self, pct: float, animate: bool = True) -> None:
+        self.overall.set_fraction(pct / 100.0, animate=animate)
+        self.overall_pct.setText(f"{int(round(pct))}%")
+
     def _recompute_overall(self) -> None:
         if self._verify_only:
-            # Standalone Verify run: the overall bar == the verify row.
-            self.overall.setValue(self.rows["verify"].bar.value())
+            self._set_overall(self.rows["verify"].value_pct())
             return
-        weights = (
-            self._W_WITH_VERIFY if self._verify_enabled else self._W_WITHOUT_VERIFY
-        )
-        total = 0.0
-        for key in _PHASE_ORDER:
-            w = weights.get(key, 0.0)
-            if w == 0:
-                continue
-            total += w * (self.rows[key].bar.value() / 100.0)
-        self.overall.setValue(int(round(total * 100)))
+        weights = self._W_WITH_VERIFY if self._verify_enabled else self._W_WITHOUT_VERIFY
+        total = sum(w * self.rows[k].value_pct() / 100.0 for k, w in weights.items() if w)
+        self._set_overall(total * 100)
 
-
-# ---------------------------------------------------------------------------
-# Copy progress donut
-# ---------------------------------------------------------------------------
 
 class CopyProgressDonut(QtWidgets.QWidget):
-    """Ring chart of the copy work for the current run.
+    PULSE_MS = 600
 
-    The scan decides how much data has to be copied; that amount is 100%.
-    The gold arc then fills as the copy phase writes files. When the run
-    ends the ring turns:
-      - green and blinking, centre text "Finished" (all OK); it keeps
-        blinking until the next run resets the pie,
-      - red, centre text "Issues" (failed files or verify problems),
-      - amber, centre text "Stopped" (the user pressed Cancel).
-    """
-
-    BLINK_INTERVAL_MS = 500
-
-    def __init__(self, parent=None, diameter: int = 84):
+    def __init__(self, parent=None, diameter: int = 96):
         super().__init__(parent)
         self._diameter = diameter
         self.setFixedSize(diameter, diameter)
-        self._fraction = 0.0      # 0.0 - 1.0 of the copy work done
-        self._state = "idle"      # idle | running | finished | issues | stopped
-        self._label = ""
-        self._blink_on = True
-        self._blink = QtCore.QTimer(self)
-        self._blink.setInterval(self.BLINK_INTERVAL_MS)
-        self._blink.timeout.connect(self._tick_blink)
-
-    # --- state changes ---------------------------------------------------
-
-    def reset(self) -> None:
-        self._blink.stop()
         self._fraction = 0.0
+        self._shown = 0.0
         self._state = "idle"
         self._label = ""
-        self._blink_on = True
+        self._pulse_on = True
+        self._pulse = QtCore.QTimer(self)
+        self._pulse.setInterval(self.PULSE_MS)
+        self._pulse.timeout.connect(self._tick)
+        self._anim = QtCore.QVariantAnimation(self)
+        self._anim.setDuration(260)
+        self._anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(self._on_anim)
+        theme_manager.changed.connect(self.update)
+
+    def _on_anim(self, v) -> None:
+        self._shown = float(v)
+        self.update()
+
+    def _animate_to(self, f: float) -> None:
+        self._fraction = f
+        self._anim.stop()
+        self._anim.setStartValue(self._shown)
+        self._anim.setEndValue(f)
+        self._anim.start()
+
+    def reset(self) -> None:
+        self._pulse.stop()
+        self._anim.stop()
+        self._fraction = self._shown = 0.0
+        self._state = "idle"
+        self._label = ""
+        self._pulse_on = True
         self.update()
 
     def set_progress(self, fraction: float) -> None:
-        """Copy work done so far, 0.0 - 1.0."""
-        self._blink.stop()
-        self._fraction = max(0.0, min(1.0, fraction))
+        self._pulse.stop()
         self._state = "running"
-        self._label = f"{int(self._fraction * 100)}%"
-        self._blink_on = True
-        self.update()
+        f = max(0.0, min(1.0, fraction))
+        self._label = f"{int(f * 100)}%"
+        self._pulse_on = True
+        self._animate_to(f)
 
     def show_finished(self) -> None:
-        self._fraction = 1.0
         self._state = "finished"
-        self._label = "Finished"
-        self._blink_on = True
-        self._blink.start()
-        self.update()
+        self._label = "Done"
+        self._pulse_on = True
+        self._pulse.start()
+        self._animate_to(1.0)
 
     def show_issues(self, label: str = "Issues") -> None:
-        self._blink.stop()
-        self._fraction = 1.0
+        self._pulse.stop()
         self._state = "issues"
         self._label = label
-        self._blink_on = True
-        self.update()
+        self._animate_to(1.0)
 
     def show_stopped(self) -> None:
-        # Keep the arc where the copy stopped so the user sees how far it got.
-        self._blink.stop()
+        self._pulse.stop()
         self._state = "stopped"
         self._label = "Stopped"
-        self._blink_on = True
         self.update()
 
-    def _tick_blink(self) -> None:
-        self._blink_on = not self._blink_on
-        self.update()
+    def state(self) -> str:
+        return self._state
 
-    # --- painting --------------------------------------------------------
+    def _tick(self) -> None:
+        self._pulse_on = not self._pulse_on
+        self.update()
 
     def _arc_color(self) -> QtGui.QColor:
         if self._state == "finished":
-            return QtGui.QColor(_OK if self._blink_on else "#2c5a42")
-        if self._state == "issues":
-            return QtGui.QColor(_ERR)
-        if self._state == "stopped":
-            return QtGui.QColor(_WARN)
-        return QtGui.QColor(_ACCENT)
+            c = color("ok")
+            if not self._pulse_on:
+                c.setAlphaF(0.55)
+            return c
+        return color({"issues": "err", "stopped": "warn"}.get(self._state, "accent"))
 
-    def paintEvent(self, ev: QtGui.QPaintEvent) -> None:
-        qp = QtGui.QPainter(self)
-        qp.setRenderHint(QtGui.QPainter.Antialiasing)
-        qp.setPen(QtCore.Qt.NoPen)
-
-        outer = QtCore.QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        thickness = max(8.0, self._diameter * 0.14)
-        inner = outer.adjusted(thickness, thickness, -thickness, -thickness)
-
-        # Real ring (outer minus inner), so the panel behind shows through
-        # the hole in both the dark and the light theme.
-        ring = QtGui.QPainterPath()
-        ring.addEllipse(outer)
-        hole = QtGui.QPainterPath()
-        hole.addEllipse(inner)
-        ring = ring.subtracted(hole)
-
-        # Track: semi-transparent grey reads on dark and light panels alike.
-        qp.setBrush(QtGui.QColor(128, 128, 128, 90))
-        qp.drawPath(ring)
-
-        # Progress arc from 12 o'clock, clockwise.
-        if self._fraction > 0:
-            sweep = QtGui.QPainterPath()
-            centre = outer.center()
-            sweep.moveTo(centre)
-            sweep.arcTo(outer, 90.0, -self._fraction * 360.0)
-            sweep.closeSubpath()
-            qp.setBrush(self._arc_color())
-            qp.drawPath(sweep.intersected(ring))
-
-        # Centre text, shrunk until it fits inside the hole.
+    def paintEvent(self, _ev) -> None:
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        thick = max(6.0, self._diameter * 0.085)
+        r = QtCore.QRectF(self.rect()).adjusted(thick / 2 + 1, thick / 2 + 1, -thick / 2 - 1, -thick / 2 - 1)
+        pen = QtGui.QPen(color("track"), thick)
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        p.setPen(pen)
+        p.drawEllipse(r)
+        if self._shown > 0.001:
+            pen.setColor(self._arc_color())
+            p.setPen(pen)
+            p.drawArc(r, 90 * 16, int(-self._shown * 360 * 16))
         if self._label:
-            # Only the ring blinks; the text keeps the bright state colour so
-            # "Finished" stays readable on the dim half of the blink.
-            text_color = {
-                "finished": QtGui.QColor(_OK),
-                "issues": QtGui.QColor(_ERR),
-                "stopped": QtGui.QColor(_WARN),
-            }.get(self._state, self.palette().color(QtGui.QPalette.WindowText))
-            qp.setPen(text_color)
+            text_key = {"finished": "ok", "issues": "err", "stopped": "warn"}.get(self._state, "text")
+            p.setPen(color(text_key))
             f = QtGui.QFont(self.font())
-            f.setBold(True)
-            room = inner.width() - 6
-            for size in (11, 10, 9, 8, 7, 6):
+            f.setWeight(QtGui.QFont.DemiBold)
+            room = r.width() - thick - 6
+            for size in (15, 13, 12, 11, 10, 9, 8):
                 f.setPointSize(size)
                 if QtGui.QFontMetrics(f).horizontalAdvance(self._label) <= room:
                     break
-            qp.setFont(f)
-            qp.drawText(outer, QtCore.Qt.AlignCenter, self._label)
+            p.setFont(f)
+            p.drawText(self.rect(), QtCore.Qt.AlignCenter, self._label)
+        p.end()
 
-        qp.end()
 
-
-# ---------------------------------------------------------------------------
-# Verify banner
-# ---------------------------------------------------------------------------
-
-class VerifyBanner(QtWidgets.QLabel):
-    """Flashed under the progress area after a verify-enabled run finishes.
-
-    Pass: green background, auto-dismisses after 10 s.
-    Fail: red background, sticky — clicking it invokes the on_click callback
-    (used to open the issues dialog).
-    """
+class VerifyBanner(QtWidgets.QFrame):
+    """Inline Fluent InfoBar for the verify result."""
 
     DISMISS_MS = 10_000
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("verifyBanner")
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
         self.setVisible(False)
-        self.setWordWrap(True)
-        self.setAlignment(QtCore.Qt.AlignCenter)
-        self.setMinimumHeight(40)
         self.setCursor(QtCore.Qt.PointingHandCursor)
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(12)
+        self._icon = QtWidgets.QLabel()
+        self._icon.setFixedSize(20, 20)
+        lay.addWidget(self._icon, 0, QtCore.Qt.AlignTop)
+        col = QtWidgets.QVBoxLayout()
+        col.setSpacing(2)
+        self._title = QtWidgets.QLabel()
+        self._title.setStyleSheet("font-weight: 600;")
+        self._text = QtWidgets.QLabel()
+        self._text.setWordWrap(True)
+        self._text.setObjectName("body")
+        col.addWidget(self._title)
+        col.addWidget(self._text)
+        lay.addLayout(col, 1)
+        self._hint = QtWidgets.QLabel()
+        self._hint.setObjectName("caption")
+        lay.addWidget(self._hint, 0, QtCore.Qt.AlignVCenter)
         self._on_click: Optional[Callable[[], None]] = None
-
+        self._kind = "ok"
         self._timer = QtCore.QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
+        theme_manager.changed.connect(self._restyle)
+
+    def text(self) -> str:
+        return f"{self._title.text()} {self._text.text()}"
+
+    def _restyle(self) -> None:
+        fg = "ok" if self._kind == "ok" else "err"
+        bg = color(fg + "_soft")
+        line = color(fg)
+        self.setStyleSheet(
+            f"QFrame#verifyBanner {{ background: rgba({bg.red()},{bg.green()},{bg.blue()},{bg.alphaF():.2f});"
+            f" border: 1px solid rgba({line.red()},{line.green()},{line.blue()},0.45); border-radius: 8px; }}"
+        )
+        self._icon.setPixmap(icons.pixmap("check-circle" if self._kind == "ok" else "error", 20, fg))
+
+    def _show(self, kind: str, text: str, hint: str) -> None:
+        self._kind = kind
+        title, _, rest = text.partition(" — ")
+        self._title.setText(title)
+        self._text.setText(rest[:1].upper() + rest[1:])
+        self._text.setVisible(bool(rest))
+        self._hint.setText(hint)
+        self._restyle()
+        self.setVisible(True)
 
     def show_pass(self, text: str) -> None:
         self._on_click = None
-        self.setStyleSheet(
-            "QLabel { background-color: #1e4a30; color: #d4f0dd;"
-            " border: 1px solid #5fb88a; border-radius: 6px;"
-            " padding: 10px; font-weight: 600; font-size: 11pt; }"
-        )
-        self.setText("✓  " + text + "   (click to dismiss)")
-        self.setVisible(True)
+        self._show("ok", text, "Click to dismiss")
         self._timer.start(self.DISMISS_MS)
 
     def show_fail(self, text: str, on_click: Optional[Callable[[], None]] = None) -> None:
         self._on_click = on_click
-        self.setStyleSheet(
-            "QLabel { background-color: #4a1a1a; color: #ffd0d0;"
-            " border: 1px solid #e35d6a; border-radius: 6px;"
-            " padding: 10px; font-weight: 600; font-size: 11pt; }"
-        )
-        suffix = "   (click to open issues)" if on_click else ""
-        self.setText("✗  " + text + suffix)
-        self.setVisible(True)
-        # Fail banner is sticky — no timer.
+        self._show("err", text, "Click to view issues" if on_click else "")
         self._timer.stop()
 
     def dismiss(self) -> None:
@@ -498,8 +417,5 @@ class VerifyBanner(QtWidgets.QLabel):
         cb = self._on_click
         self.dismiss()
         if cb is not None:
-            try:
-                cb()
-            except Exception:
-                pass
+            cb()
         super().mousePressEvent(ev)
