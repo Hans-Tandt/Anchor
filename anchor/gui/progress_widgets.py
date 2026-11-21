@@ -135,11 +135,30 @@ class _PhaseRow(QtWidgets.QFrame):
         )
         lay.addWidget(self.detail_lbl)
 
+        # The bar of the running phase blinks (bright / dim gold) so the eye
+        # finds the active phase at once.
+        self._state = "pending"
+        self._blink_on = True
+        self._applied = None  # (state, blink_on) last written to the stylesheet
+        self._blink = QtCore.QTimer(self)
+        self._blink.setInterval(500)
+        self._blink.timeout.connect(self._tick_blink)
+
         self._apply_state("pending")
 
     def set_state(self, state: str, progress_pct: float = 0.0, detail: str = "") -> None:
         if state not in _STATE_ICONS:
             state = "pending"
+        self._state = state
+        if state == "running":
+            # Progress events arrive ~10x per second: only start the timer
+            # once, or it would never get to tick.
+            if not self._blink.isActive():
+                self._blink_on = True
+                self._blink.start()
+        else:
+            self._blink.stop()
+            self._blink_on = True
         self._apply_state(state)
         self.bar.setRange(0, 100)
         self.bar.setValue(max(0, min(100, int(round(progress_pct)))))
@@ -147,10 +166,24 @@ class _PhaseRow(QtWidgets.QFrame):
             self.bar.setValue(100)
         self.detail_lbl.setText(detail)
 
+    def _tick_blink(self) -> None:
+        if self._state != "running":
+            self._blink.stop()
+            return
+        self._blink_on = not self._blink_on
+        self._apply_state(self._state)
+
     def _apply_state(self, state: str) -> None:
+        # Re-writing a stylesheet re-polishes the whole row; skip it when
+        # nothing visible changed (set_state runs on every progress event).
+        key = (state, self._blink_on)
+        if key == self._applied:
+            return
+        self._applied = key
         self.icon_lbl.setText(_STATE_ICONS[state])
         color = _STATE_COLORS[state]
         self.icon_lbl.setStyleSheet(f"color: {color};")
+        bar_color = color if (state != "running" or self._blink_on) else _ACCENT_DIM
         # Highlight the row's background while running so the eye jumps to it.
         bg = _ROW_BG_RUNNING if state == "running" else "transparent"
         self.setStyleSheet(
@@ -158,7 +191,7 @@ class _PhaseRow(QtWidgets.QFrame):
             f" background: {bg}; border-radius: 4px; }}"
             # Make the thin bar match the state colour (gold while running,
             # green when done, orange on issue, muted when pending).
-            f" QProgressBar::chunk {{ background: {color}; border-radius: 2px; }}"
+            f" QProgressBar::chunk {{ background: {bar_color}; border-radius: 2px; }}"
             f" QProgressBar {{ background: {_MUTED}; border: none; border-radius: 2px; }}"
         )
         self.name_lbl.setStyleSheet(
