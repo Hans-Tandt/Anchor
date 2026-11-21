@@ -8,11 +8,10 @@ Three widgets live here so main_window.py does not balloon:
     bar for that phase's progress, and a right-aligned detail string (duration,
     live counts, etc.). The row for the currently-running phase is highlighted.
 
-- ScanDonutWidget
-    A 72x72 donut that paints two slices — "to copy" in the accent colour and
-    "unchanged" in muted. Live-updates during the scan phase as classify() emits
-    progress. The hole shows the current "to copy" percentage as text. Full
-    counts are exposed via tooltip.
+- CopyProgressDonut
+    An 84x84 ring that shows the copy work of the current run. The scan sets
+    the total (100%); the gold arc fills as files are copied. At the end it
+    blinks green with "Finished", or turns red ("Issues") / amber ("Stopped").
 
 - VerifyBanner
     A stylised banner shown under the progress area after a run finishes. Green
@@ -265,79 +264,151 @@ class PhaseStripWidget(QtWidgets.QFrame):
 
 
 # ---------------------------------------------------------------------------
-# Scan donut
+# Copy progress donut
 # ---------------------------------------------------------------------------
 
-class ScanDonutWidget(QtWidgets.QWidget):
-    """Donut (ring) chart: gold slice = files that need copying, muted slice =
-    unchanged. Centre text is the % to copy. Updated live during scan.
+class CopyProgressDonut(QtWidgets.QWidget):
+    """Ring chart of the copy work for the current run.
+
+    The scan decides how much data has to be copied; that amount is 100%.
+    The gold arc then fills as the copy phase writes files. When the run
+    ends the ring turns:
+      - green and blinks for BLINK_MS, centre text "Finished" (all OK),
+      - red, centre text "Issues" (failed files or verify problems),
+      - amber, centre text "Stopped" (the user pressed Cancel).
     """
 
-    def __init__(self, parent=None, diameter: int = 72):
+    BLINK_INTERVAL_MS = 500
+    BLINK_MS = 10_000
+
+    def __init__(self, parent=None, diameter: int = 84):
         super().__init__(parent)
         self._diameter = diameter
         self.setFixedSize(diameter, diameter)
-        self._copy_pct = 0.0  # 0.0 - 1.0
-        self._copy_count = 0
-        self._unchanged_count = 0
-        self._active = False
-        self.setToolTip("Scan not started yet")
+        self._fraction = 0.0      # 0.0 - 1.0 of the copy work done
+        self._state = "idle"      # idle | running | finished | issues | stopped
+        self._label = ""
+        self._blink_on = True
+        self._blink_ticks_left = 0
+        self._blink = QtCore.QTimer(self)
+        self._blink.setInterval(self.BLINK_INTERVAL_MS)
+        self._blink.timeout.connect(self._tick_blink)
+
+    # --- state changes ---------------------------------------------------
 
     def reset(self) -> None:
-        self._copy_pct = 0.0
-        self._copy_count = 0
-        self._unchanged_count = 0
-        self._active = False
-        self.setToolTip("Scan not started yet")
+        self._blink.stop()
+        self._fraction = 0.0
+        self._state = "idle"
+        self._label = ""
+        self._blink_on = True
         self.update()
 
-    def set_fractions(self, copy_count: int, unchanged_count: int) -> None:
-        """Update the donut from the engine's live counts."""
-        total = copy_count + unchanged_count
-        self._copy_count = copy_count
-        self._unchanged_count = unchanged_count
-        self._copy_pct = (copy_count / total) if total > 0 else 0.0
-        self._active = True
-        self.setToolTip(
-            f"To copy: {copy_count} files\n"
-            f"Unchanged: {unchanged_count} files\n"
-            f"Total classified: {total} files"
-        )
+    def set_progress(self, fraction: float) -> None:
+        """Copy work done so far, 0.0 - 1.0."""
+        self._blink.stop()
+        self._fraction = max(0.0, min(1.0, fraction))
+        self._state = "running"
+        self._label = f"{int(self._fraction * 100)}%"
+        self._blink_on = True
         self.update()
+
+    def show_finished(self) -> None:
+        self._fraction = 1.0
+        self._state = "finished"
+        self._label = "Finished"
+        self._blink_on = True
+        self._blink_ticks_left = self.BLINK_MS // self.BLINK_INTERVAL_MS
+        self._blink.start()
+        self.update()
+
+    def show_issues(self, label: str = "Issues") -> None:
+        self._blink.stop()
+        self._fraction = 1.0
+        self._state = "issues"
+        self._label = label
+        self._blink_on = True
+        self.update()
+
+    def show_stopped(self) -> None:
+        # Keep the arc where the copy stopped so the user sees how far it got.
+        self._blink.stop()
+        self._state = "stopped"
+        self._label = "Stopped"
+        self._blink_on = True
+        self.update()
+
+    def _tick_blink(self) -> None:
+        self._blink_ticks_left -= 1
+        if self._blink_ticks_left <= 0:
+            # Blink over: hold a solid green ring.
+            self._blink.stop()
+            self._blink_on = True
+        else:
+            self._blink_on = not self._blink_on
+        self.update()
+
+    # --- painting --------------------------------------------------------
+
+    def _arc_color(self) -> QtGui.QColor:
+        if self._state == "finished":
+            return QtGui.QColor(_OK if self._blink_on else "#2c5a42")
+        if self._state == "issues":
+            return QtGui.QColor(_ERR)
+        if self._state == "stopped":
+            return QtGui.QColor(_WARN)
+        return QtGui.QColor(_ACCENT)
 
     def paintEvent(self, ev: QtGui.QPaintEvent) -> None:
         qp = QtGui.QPainter(self)
         qp.setRenderHint(QtGui.QPainter.Antialiasing)
-
-        rect = self.rect().adjusted(2, 2, -2, -2)
-        # Background ring (muted = unchanged slice)
-        base_color = QtGui.QColor(_MUTED)
-        qp.setBrush(base_color)
         qp.setPen(QtCore.Qt.NoPen)
-        qp.drawEllipse(rect)
 
-        # Accent slice (gold = to copy), starts at 12 o'clock and sweeps clockwise.
-        if self._active and self._copy_pct > 0:
-            span_deg = -self._copy_pct * 360  # negative = clockwise in Qt
-            qp.setBrush(QtGui.QColor(_ACCENT))
-            qp.drawPie(rect, 90 * 16, int(span_deg * 16))
+        outer = QtCore.QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        thickness = max(8.0, self._diameter * 0.14)
+        inner = outer.adjusted(thickness, thickness, -thickness, -thickness)
 
-        # Punch out the centre hole to make it a ring.
-        hole_margin = int(self._diameter * 0.22)
-        hole = rect.adjusted(hole_margin, hole_margin, -hole_margin, -hole_margin)
-        # Use the parent's background by filling with the surrounding colour.
-        # QWidget doesn't give us that directly, so just use the panel colour.
-        qp.setBrush(QtGui.QColor("#16181d"))
-        qp.drawEllipse(hole)
+        # Real ring (outer minus inner), so the panel behind shows through
+        # the hole in both the dark and the light theme.
+        ring = QtGui.QPainterPath()
+        ring.addEllipse(outer)
+        hole = QtGui.QPainterPath()
+        hole.addEllipse(inner)
+        ring = ring.subtracted(hole)
 
-        # Centre text — "12%" or "—" when inactive.
-        qp.setPen(QtGui.QColor(_TEXT))
-        f = qp.font()
-        f.setPointSize(10)
-        f.setBold(True)
-        qp.setFont(f)
-        txt = f"{int(round(self._copy_pct * 100))}%" if self._active else "—"
-        qp.drawText(rect, QtCore.Qt.AlignCenter, txt)
+        # Track: semi-transparent grey reads on dark and light panels alike.
+        qp.setBrush(QtGui.QColor(128, 128, 128, 90))
+        qp.drawPath(ring)
+
+        # Progress arc from 12 o'clock, clockwise.
+        if self._fraction > 0:
+            sweep = QtGui.QPainterPath()
+            centre = outer.center()
+            sweep.moveTo(centre)
+            sweep.arcTo(outer, 90.0, -self._fraction * 360.0)
+            sweep.closeSubpath()
+            qp.setBrush(self._arc_color())
+            qp.drawPath(sweep.intersected(ring))
+
+        # Centre text, shrunk until it fits inside the hole.
+        if self._label:
+            # Only the ring blinks; the text keeps the bright state colour so
+            # "Finished" stays readable on the dim half of the blink.
+            text_color = {
+                "finished": QtGui.QColor(_OK),
+                "issues": QtGui.QColor(_ERR),
+                "stopped": QtGui.QColor(_WARN),
+            }.get(self._state, self.palette().color(QtGui.QPalette.WindowText))
+            qp.setPen(text_color)
+            f = QtGui.QFont(self.font())
+            f.setBold(True)
+            room = inner.width() - 6
+            for size in (11, 10, 9, 8, 7, 6):
+                f.setPointSize(size)
+                if QtGui.QFontMetrics(f).horizontalAdvance(self._label) <= room:
+                    break
+            qp.setFont(f)
+            qp.drawText(outer, QtCore.Qt.AlignCenter, self._label)
 
         qp.end()
 

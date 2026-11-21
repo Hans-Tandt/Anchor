@@ -37,7 +37,7 @@ from .. import scheduler as sched
 
 from .issues_dialog import IssuesDialog
 from .profile_editor import ProfileEditor
-from .progress_widgets import PhaseStripWidget, ScanDonutWidget, VerifyBanner
+from .progress_widgets import CopyProgressDonut, PhaseStripWidget, VerifyBanner
 from .restore_dialog import RestoreDialog
 from .schedule_dialog import ScheduleDialog
 from .settings_dialog import SettingsDialog
@@ -297,45 +297,41 @@ class MainWindow(QtWidgets.QMainWindow):
         progress_row.setSpacing(12)
         self.phase_strip = PhaseStripWidget()
         progress_row.addWidget(self.phase_strip, 1)
-        self.scan_donut = ScanDonutWidget(diameter=72)
-        self.scan_donut.setToolTip(
-            "After Scan finishes, shows the share of source files that "
-            "need copying (changed since the last run) vs unchanged. "
-            "Updates once per run, when the scan completes."
+        self.copy_donut = CopyProgressDonut(diameter=84)
+        self.copy_donut.setToolTip(
+            "Copy progress for this run.\n"
+            "When the scan ends, the data that must be copied is 100%.\n"
+            "The gold ring fills as files are copied.\n"
+            "Blinking green 'Finished' = run completed OK; red 'Issues' = "
+            "failed files or verify problems; amber 'Stopped' = cancelled."
         )
         donut_col = QtWidgets.QVBoxLayout()
         donut_col.setSpacing(2)
         donut_col.addStretch(1)
-        donut_col.addWidget(self.scan_donut, 0, QtCore.Qt.AlignHCenter)
-        # Legend below the donut: coloured dot + label + live count, one row
-        # per slice. "to copy" uses the same gold as the donut's accent
-        # slice; "unchanged" uses the muted grey of the ring background.
-        # Both share the donut's tooltip.
-        legend_tip = self.scan_donut.toolTip()
-        self._donut_legend_copy = QtWidgets.QLabel()
-        self._donut_legend_copy.setAlignment(QtCore.Qt.AlignHCenter)
-        self._donut_legend_copy.setStyleSheet(
-            "color: #ece6d8; font-size: 8pt;"
-        )
-        self._donut_legend_copy.setToolTip(legend_tip)
-        self._donut_legend_skip = QtWidgets.QLabel()
-        self._donut_legend_skip.setAlignment(QtCore.Qt.AlignHCenter)
-        self._donut_legend_skip.setStyleSheet(
-            "color: #8a8578; font-size: 8pt;"
-        )
-        self._donut_legend_skip.setToolTip(legend_tip)
-        donut_col.addWidget(self._donut_legend_copy)
-        donut_col.addWidget(self._donut_legend_skip)
+        donut_col.addWidget(self.copy_donut, 0, QtCore.Qt.AlignHCenter)
+        # Legend: gold dot = work done, grey dot = work left, with file
+        # counts and sizes. Text colour comes from the theme so it reads in
+        # both dark and light mode.
+        legend_tip = self.copy_donut.toolTip()
+        self._donut_legend_done = QtWidgets.QLabel()
+        self._donut_legend_done.setAlignment(QtCore.Qt.AlignHCenter)
+        self._donut_legend_done.setStyleSheet("font-size: 8pt;")
+        self._donut_legend_done.setToolTip(legend_tip)
+        self._donut_legend_left = QtWidgets.QLabel()
+        self._donut_legend_left.setObjectName("muted")
+        self._donut_legend_left.setAlignment(QtCore.Qt.AlignHCenter)
+        self._donut_legend_left.setStyleSheet("font-size: 8pt;")
+        self._donut_legend_left.setToolTip(legend_tip)
+        donut_col.addWidget(self._donut_legend_done)
+        donut_col.addWidget(self._donut_legend_left)
         donut_col.addStretch(1)
         progress_row.addLayout(donut_col)
         dl.addLayout(progress_row)
-        # Donut defaults to visible — hide it (and the legend) until a
-        # backup run reaches scan-done, otherwise they're on-screen at app
-        # launch with nothing meaningful to show.
-        self.scan_donut.setVisible(False)
-        self._donut_legend_copy.setVisible(False)
-        self._donut_legend_skip.setVisible(False)
-        self._update_donut_legend(0, 0)
+        # Hidden until a backup run's scan has measured the work to do.
+        self._show_copy_donut(False)
+        # Totals for the current copy, set at scan-done.
+        self._copy_total_files = 0
+        self._copy_total_bytes = 0
 
         # Confirm-copy button (hidden by default)
         self.confirm_copy_btn = QtWidgets.QPushButton("▶  Start copy")
@@ -499,8 +495,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sources_box.setStyleSheet(self._frame_qss(self._FRAME_NEUTRAL))
         self.dest_box.setStyleSheet(self._frame_qss(self._FRAME_NEUTRAL))
         self.phase_strip.reset(verify_enabled=True)
-        self.scan_donut.reset()
-        self._show_scan_donut(False)  # idle: no donut shown
+        self.copy_donut.reset()
+        self._show_copy_donut(False)  # idle: no donut shown
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._set_progress_text("")
@@ -748,11 +744,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.edit_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
         self.phase_strip.reset(verify_enabled=self.current.verify_after_copy)
-        self.scan_donut.reset()
+        self.copy_donut.reset()
         # Keep the donut (and its caption) hidden until the scan finishes
         # and has real numbers to show — during the Scan phase it would
         # just sit at '—' with nothing meaningful to say.
-        self._show_scan_donut(False)
+        self._show_copy_donut(False)
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -808,8 +804,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_group_btn.setEnabled(False)
         any_verify = any(p.verify_after_copy for p in profiles)
         self.phase_strip.reset(verify_enabled=any_verify)
-        self.scan_donut.reset()
-        self._show_scan_donut(False)  # revealed at scan-done, per profile
+        self.copy_donut.reset()
+        self._show_copy_donut(False)  # revealed at scan-done, per profile
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -823,6 +819,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_profiles(select_id=self.current.id if self.current else "")
 
     def _on_group_finished_ok(self, results) -> None:
+        cancelled = bool(self.group_worker and self.group_worker.is_cancelling())
         self.group_worker = None
         self.run_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
@@ -884,6 +881,10 @@ class MainWindow(QtWidgets.QMainWindow):
             all_issues.extend(r.errors or [])
             all_issues.extend(r.verify_issues or [])
         self._set_last_errors(all_issues, title="Group run — issues")
+        self._finish_copy_donut(
+            cancelled=cancelled,
+            had_issues=bool(total_failed or total_verify_issues),
+        )
         self._refresh_profiles(select_id=self.current.id if self.current else "")
         # Refresh visibility of the run-group button against the (now-stale)
         # selection state.
@@ -898,6 +899,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
         self.run_group_btn.setEnabled(True)
+        if not self.copy_donut.isHidden():
+            self.copy_donut.show_issues("Error")
         self._set_progress_text(f"Group run aborted: {msg}")
         self.statusBar().showMessage("Error")
         QtWidgets.QMessageBox.critical(self, "Group run failed", msg)
@@ -928,8 +931,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Standalone Verify: hide scan/copy rows, show only the verify row.
         # The scan donut is meaningless here (no scan phase) — hide it.
         self.phase_strip.set_verify_only_mode()
-        self.scan_donut.reset()
-        self._show_scan_donut(False)
+        self.copy_donut.reset()
+        self._show_copy_donut(False)
         self.verify_banner.dismiss()
         self.confirm_copy_btn.setVisible(False)
         self._prev_phase = ""
@@ -1009,13 +1012,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- scanning / scan-done -----------------------------------
         if phase in ("scanning", "scan-done"):
-            # NOTE: the donut used to update live while classifying files,
-            # but the percentage wobbles wildly before the denominator
-            # settles (first classified file "to copy" → 100%, then the
-            # ratio drops as unchanged files dominate). That's confusing
-            # rather than informative. The donut now stays at its idle
-            # state during scanning and snaps to the resolved ratio at
-            # scan-done, where the value is stable and meaningful.
+            # The donut measures copy work, which is unknown until the scan
+            # ends. Keep it hidden while scanning (this also covers the next
+            # destination or the next profile of a group run).
+            if phase == "scanning":
+                self._show_copy_donut(False)
             if phase == "scanning" and p.files_total > 0:
                 pct = p.files_done * 100.0 / max(1, p.files_total)
                 detail = f"{p.files_done}/{p.files_total}"
@@ -1027,18 +1028,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     "scan", "done", 100,
                     f"{p.files_total} files  •  {_human_bytes(p.bytes_total)}",
                 )
-                # Final donut update with the resolved counts, and REVEAL it
-                # now (it was hidden up to this point since there was nothing
-                # meaningful to show). Held through the Copy and Verify
-                # phases so the user can still see the "N% of source files
-                # needed backing up" summary at a glance.
-                self.scan_donut.set_fractions(
-                    p.files_to_copy, p.files_skipped,
-                )
-                self._update_donut_legend(
-                    p.files_to_copy, p.files_skipped,
-                )
-                self._show_scan_donut(True)
+                # The scan has measured the work: this is the 100% mark.
+                self._copy_total_files = p.files_to_copy
+                self._copy_total_bytes = p.bytes_to_copy
+                self._set_donut_copy_progress(0, 0)
+                self._show_copy_donut(True)
                 # Show the confirm button if the profile asked for it.
                 if self.current and getattr(
                     self.current, "confirm_before_copy", False,
@@ -1064,6 +1058,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"{_human_bytes(p.bytes_done)}/{_human_bytes(p.bytes_total)}"
             )
             self.phase_strip.set_phase("copy", "running", pct, detail)
+            # The engine's copy totals are the same numbers the scan
+            # reported; take them again in case scan-done was skipped
+            # (scan pause set to 0 and no confirm step).
+            self._copy_total_files = p.files_total
+            self._copy_total_bytes = p.bytes_total
+            self._set_donut_copy_progress(p.files_done, p.bytes_done)
+            self._show_copy_donut(True)
 
         # ---- verifying -------------------------------------------------
         elif phase == "verifying":
@@ -1156,29 +1157,41 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.group_worker:
             self.group_worker.confirm_start_copy()
 
-    def _show_scan_donut(self, visible: bool) -> None:
-        """Toggle the scan donut AND its legend together, so they appear/
-        disappear as a single unit. The donut is only meaningful from the
-        scan-done phase onwards within a Backup run."""
-        self.scan_donut.setVisible(visible)
-        self._donut_legend_copy.setVisible(visible)
-        self._donut_legend_skip.setVisible(visible)
+    def _show_copy_donut(self, visible: bool) -> None:
+        """Show or hide the copy donut and its legend as one unit."""
+        self.copy_donut.setVisible(visible)
+        self._donut_legend_done.setVisible(visible)
+        self._donut_legend_left.setVisible(visible)
 
-    def _update_donut_legend(self, copy_count: int, unchanged_count: int) -> None:
-        """Fill the two legend rows under the donut with current counts.
-        Numbers use thousands separators (42,733) so big totals stay
-        readable at a glance."""
-        # The bullet character "●" is drawn in the slice colour via rich
-        # text so it visually matches the donut without needing a second
-        # painter. The accent gold is the same as _ACCENT in
-        # progress_widgets.py; the muted grey matches _MUTED there.
-        self._donut_legend_copy.setText(
-            f'<span style="color:#d4a85a">●</span>  to copy  '
-            f'<b>{copy_count:,}</b>'
+    def _update_donut_legend(
+        self, done_files: int, done_bytes: int, left_files: int, left_bytes: int,
+    ) -> None:
+        """Legend rows under the donut: work done and work left."""
+        # Dot colours match the donut: gold arc = done, grey track = left.
+        self._donut_legend_done.setText(
+            f'<span style="color:#d4a85a">●</span>  done  '
+            f'<b>{done_files:,}</b> files  ·  {_human_bytes(done_bytes)}'
         )
-        self._donut_legend_skip.setText(
-            f'<span style="color:#8a8578">●</span>  unchanged  '
-            f'<b>{unchanged_count:,}</b>'
+        self._donut_legend_left.setText(
+            f'<span style="color:#808080">●</span>  left  '
+            f'<b>{left_files:,}</b> files  ·  {_human_bytes(left_bytes)}'
+        )
+
+    def _set_donut_copy_progress(self, files_done: int, bytes_done: int) -> None:
+        """Fill the donut and legend from the copy counters, measured
+        against the totals the scan decided on."""
+        total_b = self._copy_total_bytes
+        total_f = self._copy_total_files
+        if total_b > 0:
+            fraction = bytes_done / total_b
+        elif total_f > 0:
+            fraction = files_done / total_f
+        else:
+            fraction = 1.0  # nothing to copy: the work is already complete
+        self.copy_donut.set_progress(fraction)
+        self._update_donut_legend(
+            files_done, bytes_done,
+            max(0, total_f - files_done), max(0, total_b - bytes_done),
         )
 
     def _set_progress_text(self, text: str) -> None:
@@ -1209,7 +1222,21 @@ class MainWindow(QtWidgets.QMainWindow):
         # shrinks/grows with the window.
         self._reelide_progress()
 
+    def _finish_copy_donut(self, cancelled: bool, had_issues: bool) -> None:
+        """Terminal state of the donut. Only touched when it is on screen,
+        i.e. the scan finished and measured the copy work."""
+        if self.copy_donut.isHidden():
+            return
+        if cancelled:
+            self.copy_donut.show_stopped()
+        elif had_issues:
+            self.copy_donut.show_issues()
+        else:
+            self.copy_donut.show_finished()
+
     def _on_finished_ok(self, result) -> None:
+        # The result has no cancel flag; ask the worker before dropping it.
+        cancelled = bool(self.worker and self.worker.is_cancelling())
         self.worker = None
         self.run_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
@@ -1273,6 +1300,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     f"({_human_bytes(result.bytes_copied)} copied), "
                     f"all present and sized correctly."
                 )
+        self._finish_copy_donut(
+            cancelled=cancelled,
+            had_issues=bool(result.files_failed) or verify_failed,
+        )
         self._refresh_profiles(select_id=self.current.id if self.current else "")
 
     # --- Issues panel ----------------------------------------------------
@@ -1303,6 +1334,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn.setEnabled(False)
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
+        if not self.copy_donut.isHidden():
+            self.copy_donut.show_issues("Error")
         self._set_progress_text(f"Error: {msg}")
         self.statusBar().showMessage("Error")
         QtWidgets.QMessageBox.critical(self, "Backup failed", msg)
