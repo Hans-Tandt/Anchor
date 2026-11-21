@@ -535,6 +535,13 @@ class BackupEngine:
                     except Exception:
                         log.exception("Worker task failed unexpectedly")
 
+        # Per-file emits are throttled to one per 0.1 s, so the update for the
+        # last files can be dropped. Send the final copy counters once,
+        # unthrottled, before the next phase replaces them.
+        with progress_lock:
+            progress.current_file = ""
+        self._emit(progress, force=True)
+
         # Mirror deletions — apply two safety filters before deleting anything:
         #  (a) skip entries whose source root isn't currently reachable
         #      (e.g. unmounted USB) — otherwise we'd nuke the whole backup.
