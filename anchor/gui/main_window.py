@@ -428,15 +428,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_profiles(self, select_id: str = "") -> None:
         self.profiles = list_profiles()
-        self.profile_list.clear()
-        target_row = -1
-        for i, p in enumerate(self.profiles):
-            it = QtWidgets.QListWidgetItem(self._profile_row_text(p))
-            it.setData(QtCore.Qt.UserRole, p.id)
-            it.setToolTip(p.name)
-            self.profile_list.addItem(it)
-            if p.id == select_id:
-                target_row = i
+        # clear() briefly leaves no row selected, which would reach
+        # _on_profile_select(-1) -> _render_no_profile and wipe the progress
+        # area (pie, bars, verify banner) right after every run. Rebuild the
+        # list with its signals blocked; setCurrentRow below emits normally.
+        self.profile_list.blockSignals(True)
+        try:
+            self.profile_list.clear()
+            target_row = -1
+            for i, p in enumerate(self.profiles):
+                it = QtWidgets.QListWidgetItem(self._profile_row_text(p))
+                it.setData(QtCore.Qt.UserRole, p.id)
+                it.setToolTip(p.name)
+                self.profile_list.addItem(it)
+                if p.id == select_id:
+                    target_row = i
+        finally:
+            self.profile_list.blockSignals(False)
         if self.profiles:
             self.profile_list.setCurrentRow(target_row if target_row >= 0 else 0)
         else:
