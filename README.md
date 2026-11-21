@@ -45,7 +45,7 @@ Set it up once, schedule it, and forget it. Or run it by hand from a friendly GU
 ## Download
 
 The latest version (1.4.4), with its SHA-256 checksum, is on the project page:
-<https://hanstandt.be/projects/anchor/>. The old 1.2.0 release on GitHub is out of date.
+<https://hanstandt.be/projects/anchor/>, and under Releases on GitHub.
 
 **Coming from 1.2.0?** That version skipped `.git` folders by default, so the history of Git
 repositories was not backed up. Open each profile, go to **Edit > Exclusions** and remove the `.git`
