@@ -143,8 +143,8 @@ class BackupGroupWorker(QtCore.QThread):
     def _make_progress_emitter(self, i: int, total: int, name: str):
         """Wrap each profile's progress so dest_label includes 'i/N name'."""
         def _emit(p: BackupProgress) -> None:
-            # Mutate the label in-place — the engine owns its own copy and
-            # never reuses BackupProgress across destinations, so this is safe.
+            # Safe to change the label: each event is a fresh snapshot made by
+            # BackupEngine._emit, not the engine's live progress object.
             p.dest_label = f"[{i}/{total}] {name}  •  {p.dest_label}"
             self.progress.emit(p)
         return _emit

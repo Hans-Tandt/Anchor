@@ -13,7 +13,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -713,7 +713,10 @@ class BackupEngine:
             return
         self._last_emit = now
         try:
-            self.on_event(p)
+            # Send a snapshot, not the live object: the GUI receives it later
+            # through a queued Qt signal, by which time the engine has moved
+            # on (often to the next phase with reset counters).
+            self.on_event(replace(p))
         except Exception:
             log.exception("Progress callback raised")
 
@@ -943,7 +946,7 @@ class Verifier:
             return
         self._last_emit = now
         try:
-            self.on_event(p)
+            self.on_event(replace(p))  # snapshot, see BackupEngine._emit
         except Exception:
             log.exception("Verify progress callback raised")
 
