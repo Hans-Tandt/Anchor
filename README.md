@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Hans-Tandt/Anchor" alt="License: MIT"></a>
-  <a href="https://hanstandt.be/projects/anchor/"><img src="https://img.shields.io/badge/version-1.4.1-blue" alt="Version 1.4.1"></a>
+  <a href="https://hanstandt.be/projects/anchor/"><img src="https://img.shields.io/badge/version-1.4.4-blue" alt="Version 1.4.4"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue" alt="Windows 10 / 11">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
 </p>
@@ -44,7 +44,7 @@ Set it up once, schedule it, and forget it. Or run it by hand from a friendly GU
 
 ## Download
 
-The latest version (1.4.1), with its SHA-256 checksum, is on the project page:
+The latest version (1.4.4), with its SHA-256 checksum, is on the project page:
 <https://hanstandt.be/projects/anchor/>. The old 1.2.0 release on GitHub is out of date.
 
 **Coming from 1.2.0?** That version skipped `.git` folders by default, so the history of Git
