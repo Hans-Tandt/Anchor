@@ -5,6 +5,18 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.4.3] — 2026-11-21
+
+Fixes to the 1.4.2 progress display, found while running real backups.
+
+### Fixed
+- **Progress area no longer wiped at the end of a run.** Refreshing the profile list after a run briefly left no profile selected, which reset the bars, hid the pie (so "Finished" was never seen) and removed the Verify banner. The same happened after each profile of a group run.
+- **Pie reaches 100% when the copy ends.** Progress updates are sent at most ten times a second, and the update for the last files was often dropped, so the pie could stay at e.g. "left 2 files" during Verify although those files had been copied. The engine now always sends the final copy numbers.
+
+### Changed
+- **The bar of the running phase blinks** (bright / dim gold, every half second), so the active phase — Scan, Copy or Verify — is easy to spot.
+- **"Finished" keeps blinking** green until the next backup, group run or Verify, instead of for 10 seconds only.
+
 ## [1.4.2] — 2026-11-21
 
 The progress pie now shows how far the copy has got.
