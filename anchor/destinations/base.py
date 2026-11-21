@@ -22,6 +22,61 @@ class DestinationError(Exception):
     """Raised when a destination operation fails in a recoverable way."""
 
 
+def is_safe_name(name: str) -> bool:
+    """True if `name` is a single, harmless path component.
+
+    Used to filter names returned by a destination listing (SFTP/WebDAV
+    servers and the on-disk versions tree are not trusted). Rejects empty,
+    ".", "..", anything with a path separator, a drive/stream colon or a
+    control character — none of which a Windows source file can have.
+    """
+    if not name or name in (".", ".."):
+        return False
+    if "/" in name or "\\" in name or ":" in name:
+        return False
+    return not any(ord(c) < 32 for c in name)
+
+
+def is_safe_rel_path(rel_path: str) -> bool:
+    """True if every component of a forward/backslash rel path is safe."""
+    if not rel_path:
+        return False
+    return all(is_safe_name(p) for p in rel_path.replace("\\", "/").split("/"))
+
+
+def check_rel_path(rel_path: str) -> str:
+    """Normalize a destination rel path and refuse traversal.
+
+    Leading slashes are stripped (as the backends always did); a ".."
+    component or a NUL byte raises DestinationError so no backend can be
+    driven outside its root.
+    """
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    if "\x00" in rel or any(p == ".." for p in rel.split("/")):
+        raise DestinationError(f"Unsafe destination path: {rel_path!r}")
+    return rel
+
+
+def safe_local_target(base_dir: str, rel_path: str) -> str:
+    """Join `rel_path` under `base_dir`, refusing anything that escapes it.
+
+    Use this when turning a destination rel path into a local restore target:
+    raises DestinationError for "..", absolute paths, drive letters, etc.
+    """
+    import os
+    if not is_safe_rel_path(rel_path):
+        raise DestinationError(f"Refusing unsafe restore path: {rel_path!r}")
+    base = os.path.abspath(base_dir)
+    target = os.path.abspath(os.path.join(base, rel_path.replace("/", os.sep)))
+    try:
+        inside = os.path.commonpath([base, target]) == base
+    except ValueError:
+        inside = False
+    if not inside or target == base:
+        raise DestinationError(f"Refusing restore outside {base_dir!r}: {rel_path!r}")
+    return target
+
+
 @dataclass
 class RemoteStat:
     size: int

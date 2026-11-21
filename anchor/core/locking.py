@@ -17,7 +17,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from ..app_config import APP_DIR, ensure_dirs
+from .. import app_config
+from ..app_config import ensure_dirs, is_safe_id
 
 
 class AlreadyLockedError(RuntimeError):
@@ -26,7 +27,7 @@ class AlreadyLockedError(RuntimeError):
 
 def _locks_dir() -> Path:
     ensure_dirs()
-    d = APP_DIR / "locks"
+    d = app_config.APP_DIR / "locks"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -45,6 +46,8 @@ class RunLock:
     """
 
     def __init__(self, profile_id: str):
+        if not is_safe_id(profile_id):
+            raise ValueError(f"Unsafe profile id: {profile_id!r}")
         self.path: Path = _locks_dir() / f"{profile_id}.lock"
         self._fd: Optional[int] = None
 

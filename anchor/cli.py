@@ -35,15 +35,22 @@ def main(argv=None) -> int:
         log.error("Profile not found: %s", args.profile)
         return 2
 
-    engine = BackupEngine(profile)
-    result = engine.run()
+    try:
+        engine = BackupEngine(profile)
+        result = engine.run()
+    except Exception:
+        log.exception("Backup '%s' crashed", profile.name)
+        return 1
 
-    # Persist last_* fields on the profile
-    profile.last_run_iso = datetime.now().isoformat(timespec="seconds")
-    profile.last_status = result.status
-    profile.last_files_copied = result.files_copied
-    profile.last_bytes_copied = result.bytes_copied
-    save_profile(profile)
+    # Persist last_* fields on a freshly loaded copy: the run can take hours
+    # and the user may have edited the profile in the GUI meanwhile — saving
+    # the stale in-memory copy would silently revert those edits.
+    fresh = find_profile_by_id(profile.id) or profile
+    fresh.last_run_iso = datetime.now().isoformat(timespec="seconds")
+    fresh.last_status = result.status
+    fresh.last_files_copied = result.files_copied
+    fresh.last_bytes_copied = result.bytes_copied
+    save_profile(fresh)
 
     if not args.silent:
         print(

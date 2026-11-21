@@ -9,7 +9,7 @@ import fnmatch
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Iterator, List, Tuple
+from typing import Iterable, Iterator, List, Optional, Tuple
 
 
 @dataclass
@@ -83,12 +83,18 @@ def walk_sources(
     rules: ExclusionRules,
     follow_symlinks: bool = False,
     flat: bool = False,
+    errors: Optional[List[Tuple[str, str]]] = None,
 ) -> Iterator[Tuple[str, WalkItem]]:
     """Yield (dest_subfolder, WalkItem) for every non-excluded file.
 
     When `flat` is True, the sub-label is always "" so files land directly
     under the destination root with no per-source subfolder. This is only
     safe for single-source profiles (the engine enforces that).
+
+    If `errors` is given, every directory that couldn't be listed and every
+    file that couldn't be stat'ed is appended as (sub, message). The engine
+    uses this to refuse mirror-deletion for a source that was only partly
+    readable — otherwise unreadable files would look "deleted".
     """
     for raw_src in sources:
         src = os.path.abspath(raw_src) if not raw_src.startswith("\\\\") else raw_src
@@ -99,7 +105,11 @@ def walk_sources(
         if os.path.isfile(src):
             try:
                 st = os.stat(src)
-            except OSError:
+            except FileNotFoundError:
+                continue  # vanished / broken link: genuinely not there
+            except OSError as e:
+                if errors is not None:
+                    errors.append((sub, str(e)))
                 continue
             yield sub, WalkItem(
                 source_root=os.path.dirname(src),
@@ -110,7 +120,13 @@ def walk_sources(
             )
             continue
 
-        for root, dirs, files in os.walk(src, followlinks=follow_symlinks):
+        def _onerror(e: OSError, _sub: str = sub) -> None:
+            if errors is not None and not isinstance(e, FileNotFoundError):
+                errors.append((_sub, str(e)))
+
+        for root, dirs, files in os.walk(
+            src, followlinks=follow_symlinks, onerror=_onerror
+        ):
             # prune dirs in-place
             dirs[:] = [
                 d for d in dirs
@@ -123,7 +139,11 @@ def walk_sources(
                     continue
                 try:
                     st = os.stat(abs_p)
-                except OSError:
+                except FileNotFoundError:
+                    continue  # vanished / broken link: genuinely not there
+                except OSError as e:
+                    if errors is not None:
+                        errors.append((sub, str(e)))
                     continue
                 yield sub, WalkItem(
                     source_root=src,

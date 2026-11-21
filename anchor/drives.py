@@ -110,10 +110,22 @@ def find_drive_by_label(label: str) -> Optional[DriveInfo]:
 
 
 def is_path_available(path: str) -> bool:
-    """Quick check: does this path currently exist (drive plugged in / share reachable)?"""
+    """Quick check: is this destination reachable (drive plugged in / share up)?
+
+    True when the folder exists, or — for a folder Anchor hasn't created yet
+    (first run) — when its drive or UNC share root exists, because the engine
+    creates the folder itself. Previously a brand-new destination showed as
+    "offline" until it had been backed up to once.
+    """
     if not path:
         return False
     try:
-        return os.path.exists(path)
+        if os.path.exists(path):
+            return True
+        drive, _rest = os.path.splitdrive(os.path.abspath(path) if not path.startswith("\\\\") else path)
+        if not drive:
+            return False
+        root = drive if drive.endswith(("\\", "/")) else drive + os.sep
+        return os.path.exists(root)
     except Exception:
         return False
