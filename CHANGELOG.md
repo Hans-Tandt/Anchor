@@ -5,6 +5,12 @@ All notable changes to Anchor are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/).
 
+## [1.4.4] — 2026-11-21
+
+### Fixed
+- **Pie and phase bars show the right numbers at the end of the copy.** The engine passed its live progress object to the window, which reads it a moment later through the Qt event queue. By then the engine had often moved on to Verify and reset the counters, so the last copy numbers were lost and the pie stayed at e.g. "left 4 files" during Verify, although those files had been copied. The 1.4.3 fix did not cover this. Every progress message is now a snapshot taken when it is sent.
+- In group runs, the "[1/3] profile name" prefix no longer piles up in the progress line.
+
 ## [1.4.3] — 2026-11-21
 
 Fixes to the 1.4.2 progress display, found while running real backups.
