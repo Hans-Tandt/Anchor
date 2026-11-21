@@ -306,13 +306,13 @@ class CopyProgressDonut(QtWidgets.QWidget):
     The scan decides how much data has to be copied; that amount is 100%.
     The gold arc then fills as the copy phase writes files. When the run
     ends the ring turns:
-      - green and blinks for BLINK_MS, centre text "Finished" (all OK),
+      - green and blinking, centre text "Finished" (all OK); it keeps
+        blinking until the next run resets the pie,
       - red, centre text "Issues" (failed files or verify problems),
       - amber, centre text "Stopped" (the user pressed Cancel).
     """
 
     BLINK_INTERVAL_MS = 500
-    BLINK_MS = 10_000
 
     def __init__(self, parent=None, diameter: int = 84):
         super().__init__(parent)
@@ -322,7 +322,6 @@ class CopyProgressDonut(QtWidgets.QWidget):
         self._state = "idle"      # idle | running | finished | issues | stopped
         self._label = ""
         self._blink_on = True
-        self._blink_ticks_left = 0
         self._blink = QtCore.QTimer(self)
         self._blink.setInterval(self.BLINK_INTERVAL_MS)
         self._blink.timeout.connect(self._tick_blink)
@@ -351,7 +350,6 @@ class CopyProgressDonut(QtWidgets.QWidget):
         self._state = "finished"
         self._label = "Finished"
         self._blink_on = True
-        self._blink_ticks_left = self.BLINK_MS // self.BLINK_INTERVAL_MS
         self._blink.start()
         self.update()
 
@@ -372,13 +370,7 @@ class CopyProgressDonut(QtWidgets.QWidget):
         self.update()
 
     def _tick_blink(self) -> None:
-        self._blink_ticks_left -= 1
-        if self._blink_ticks_left <= 0:
-            # Blink over: hold a solid green ring.
-            self._blink.stop()
-            self._blink_on = True
-        else:
-            self._blink_on = not self._blink_on
+        self._blink_on = not self._blink_on
         self.update()
 
     # --- painting --------------------------------------------------------
