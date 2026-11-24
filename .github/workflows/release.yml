@@ -23,7 +23,7 @@ jobs:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - uses: actions/setup-python@v5
