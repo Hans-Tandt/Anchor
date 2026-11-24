@@ -45,10 +45,11 @@ More screenshots and a tour: **[docs/screenshots.md](docs/screenshots.md)**.
 
 ## Install
 
-**Download** the latest `Anchor-x.y.z-win64.zip` and its `.sha256` from
+**Download** the latest `Anchor-x.y.z-Windows.zip` from
 [Releases](https://github.com/Hans-Tandt/Anchor/releases/latest) (also on the
-[project page](https://hanstandt.be/projects/anchor/)). Unzip and run `Anchor.exe`. The build is not
-code-signed, so SmartScreen will ask once: **More info → Run anyway**.
+[project page](https://hanstandt.be/projects/anchor/)); its SHA-256 is in the release notes. Unzip
+and run `Anchor.exe`. The build is not code-signed, so SmartScreen will ask once:
+**More info → Run anyway**.
 
 **Or run from source** (Python 3.10+):
 
