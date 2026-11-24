@@ -9,7 +9,10 @@ import shutil
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from .base import Destination, DestinationError, FileVersion, RemoteStat, VERSIONS_PREFIX
+from .base import (
+    Destination, DestinationError, FileVersion, RemoteStat, VERSIONS_PREFIX,
+    check_rel_path, is_safe_rel_path,
+)
 
 
 _VERSION_SUFFIX_RE = re.compile(r"__(\d{8}T\d{6})\.bak$")
@@ -89,8 +92,21 @@ class LocalDestination(Destination):
         pass
 
     def _abs(self, rel_path: str) -> str:
-        rel = rel_path.replace("/", os.sep).lstrip(os.sep)
-        return _long_path(os.path.join(self.root, rel))
+        rel = check_rel_path(rel_path).replace("/", os.sep)
+        full = os.path.join(self.root, rel)
+        # Refuse anything that resolves outside the root (drive letters,
+        # "C:foo", etc. — ".." is already rejected by check_rel_path).
+        if rel:
+            root_abs = os.path.abspath(self.root)
+            try:
+                inside = os.path.commonpath(
+                    [root_abs, os.path.abspath(full)]
+                ) == root_abs
+            except ValueError:
+                inside = False
+            if not inside:
+                raise DestinationError(f"Unsafe destination path: {rel_path!r}")
+        return _long_path(full)
 
     def exists(self, rel_path: str) -> bool:
         return os.path.exists(self._abs(rel_path))
@@ -164,6 +180,8 @@ class LocalDestination(Destination):
             for name in files:
                 full = os.path.join(here, name)
                 rel = full[root_len:].lstrip("\\/").replace("\\", "/")
+                if not is_safe_rel_path(rel):
+                    continue
                 yield rel
 
     # --- Versioning ------------------------------------------------------

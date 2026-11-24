@@ -1,0 +1,4 @@
+# Development / CI tools (the app itself only needs requirements.txt)
+pytest>=8
+ruff>=0.6
+pillow>=10        # scripts/make_icon.py, make_brand.py, record_demo.py

@@ -25,7 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from ..app_config import STATE_DIR, ensure_dirs
+from .. import app_config
+from ..app_config import ensure_dirs, is_safe_id
 
 
 _lock = threading.RLock()
@@ -33,8 +34,10 @@ _lock = threading.RLock()
 
 class StateDB:
     def __init__(self, profile_id: str):
+        if not is_safe_id(profile_id):
+            raise ValueError(f"Unsafe profile id: {profile_id!r}")
         ensure_dirs()
-        self.path: Path = STATE_DIR / f"{profile_id}.sqlite"
+        self.path: Path = app_config.STATE_DIR / f"{profile_id}.sqlite"
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")

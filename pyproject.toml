@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anchor-backup"
+dynamic = ["version"]
+description = "A GUI-driven incremental backup tool for Windows 10 and 11."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Hans Tandt" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Archiving :: Backup",
+]
+dependencies = ["PySide6>=6.5"]
+
+[project.optional-dependencies]
+remote = ["paramiko>=3.0", "webdavclient3>=3.14", "keyring>=24.0"]
+dev = ["pytest>=8", "ruff>=0.6", "pillow>=10", "pyinstaller>=6"]
+
+[project.urls]
+Homepage = "https://hanstandt.be/projects/anchor/"
+Source = "https://github.com/Hans-Tandt/Anchor"
+Issues = "https://github.com/Hans-Tandt/Anchor/issues"
+
+[project.gui-scripts]
+anchor = "anchor.__main__:main"
+
+[project.scripts]
+anchor-cli = "anchor.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "anchor.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["anchor*"]
+
+[tool.setuptools.package-data]
+anchor = ["resources/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".specify", ".claude", "packaging"]
+
+[tool.ruff.lint]
+# Correctness-focused: real bugs, not style churn.
+select = ["E9", "F", "B006", "B008", "B023", "PLE"]
+ignore = ["F401"]   # re-exports in __init__ files
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/record_demo.py" = ["E402"]

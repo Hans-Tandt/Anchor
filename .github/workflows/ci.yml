@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff
+      - name: Ruff
+        run: ruff check --output-format=github .
+
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    # Anchor is a Windows app (Task Scheduler, Credential Manager, drive
+    # letters), so the suite runs on Windows. Qt runs headless.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q --junitxml=test-results.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-py${{ matrix.python }}
+          path: test-results.xml
+
+  build:
+    name: Build Windows exe
+    needs: [lint, test]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Build
+        run: python -m PyInstaller --noconfirm packaging/Anchor.spec
+      - name: Smoke test the exe
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:APPDATA = "$env:RUNNER_TEMP\anchor-smoke"
+          $p = Start-Process -FilePath dist\Anchor\Anchor.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "Anchor.exe exited early with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Anchor-win64-${{ github.sha }}
+          path: dist/Anchor/
+          retention-days: 14

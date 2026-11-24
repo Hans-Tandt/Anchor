@@ -24,7 +24,8 @@ build/
 dist/
 # Our maintained PyInstaller spec — commit this one; ignore everything else.
 *.spec
-!Anchor.spec
+!packaging/Anchor.spec
+test-results.xml
 
 # ---- Anchor runtime output -------------------------------------------------
 # App creates these on first run; nothing runtime belongs in the repo.

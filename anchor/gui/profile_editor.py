@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ..core.profile import BackupProfile, DestinationConfig
 from ..destinations import test_destination
 from ..drives import list_drives
+from . import icons
 
 
 # --- Exclusion presets -------------------------------------------------------
@@ -131,6 +132,14 @@ class DestinationDialog(QtWidgets.QDialog):
         rb.addRow("Remote path:", self.remote_path)
         rb.addRow(self.use_https)
         rb.addRow(self.verify_tls)
+        self.http_warn = QtWidgets.QLabel(
+            "Without HTTPS and certificate checking, your password and files cross the "
+            "network unprotected. Only use this on a network you trust."
+        )
+        self.http_warn.setWordWrap(True)
+        self.http_warn.setObjectName("warn")
+        rb.addRow(self.http_warn)
+        self.verify_tls.toggled.connect(lambda _on: self._update_http_warning())
         layout.addRow(self.remote_box)
 
         # Buttons
@@ -144,9 +153,13 @@ class DestinationDialog(QtWidgets.QDialog):
         btns.addWidget(cancel_btn); btns.addWidget(ok_btn)
         layout.addRow(btns)
 
-        self.kind.currentIndexChanged.connect(self._kind_changed)
         self._load_from_cfg(self.cfg)
-        self._kind_changed()
+        # Only apply default ports on a *user* change of type / HTTPS, not
+        # while loading — otherwise a custom SFTP port (e.g. 2222) was reset
+        # to 22 every time an existing destination was opened.
+        self._kind_changed(apply_default_port=not cfg)
+        self.kind.currentIndexChanged.connect(lambda _i: self._kind_changed(apply_default_port=True))
+        self.use_https.toggled.connect(self._https_toggled)
 
     # --- helpers ---------------------------------------------------------
 
@@ -171,17 +184,30 @@ class DestinationDialog(QtWidgets.QDialog):
         self.use_https.setChecked(c.use_https)
         self.verify_tls.setChecked(c.verify_tls)
 
-    def _kind_changed(self) -> None:
+    def _https_toggled(self, on: bool) -> None:
+        if self.kind.currentIndex() == 3 and self.port.value() in (80, 443):
+            self.port.setValue(443 if on else 80)
+        self._update_http_warning()
+
+    def _update_http_warning(self) -> None:
+        idx = self.kind.currentIndex()
+        insecure = idx == 3 and (not self.use_https.isChecked() or not self.verify_tls.isChecked())
+        self.http_warn.setVisible(insecure)
+
+    def _kind_changed(self, apply_default_port: bool = True) -> None:
         idx = self.kind.currentIndex()
         is_local = idx in (0, 1)
         self.path_widget.setEnabled(is_local)
         self.drive_combo.setEnabled(idx == 0)
         self.remote_box.setVisible(idx in (2, 3))
-        # Sensible default port
-        if idx == 2:
-            self.port.setValue(22)
-        elif idx == 3:
-            self.port.setValue(443 if self.use_https.isChecked() else 80)
+        self.use_https.setVisible(idx == 3)
+        self.verify_tls.setVisible(idx == 3)
+        if apply_default_port:
+            if idx == 2:
+                self.port.setValue(22)
+            elif idx == 3:
+                self.port.setValue(443 if self.use_https.isChecked() else 80)
+        self._update_http_warning()
 
         if idx == 1 and not self.path.text():
             # Suggest the user's OneDrive folder
@@ -232,9 +258,13 @@ class DestinationDialog(QtWidgets.QDialog):
 
     def _test(self) -> None:
         cfg = self._build_cfg()
-        if cfg.kind != "local":
-            self._save_password(cfg)
-        err = test_destination(cfg, password=self.password.text() or None)
+        # Test with the typed password but don't store it yet — it is only
+        # saved to Credential Manager when the user clicks Save.
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            err = test_destination(cfg, password=self.password.text() or None)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
         if err:
             QtWidgets.QMessageBox.warning(self, "Connection failed", err)
         else:
@@ -259,7 +289,7 @@ class ProfileEditor(QtWidgets.QDialog):
     def __init__(self, parent=None, profile: Optional[BackupProfile] = None):
         super().__init__(parent)
         self.setWindowTitle("Backup Profile")
-        self.resize(720, 640)
+        self.resize(780, 660)
         self.profile = profile or BackupProfile()
 
         root = QtWidgets.QVBoxLayout(self)
@@ -291,6 +321,8 @@ class ProfileEditor(QtWidgets.QDialog):
         rm_src.clicked.connect(self._remove_source)
         sbtns.addWidget(add_folder); sbtns.addWidget(add_file); sbtns.addWidget(rm_src); sbtns.addStretch(1)
         sl.addLayout(sbtns)
+        for b, n in ((add_folder, "folder"), (add_file, "files"), (rm_src, "trash")):
+            icons.bind_icon(b, n)
         tabs.addTab(sources_w, "Sources")
 
         # --- Destinations tab ---
@@ -307,6 +339,8 @@ class ProfileEditor(QtWidgets.QDialog):
         rm_d = QtWidgets.QPushButton("Remove"); rm_d.clicked.connect(self._remove_dest)
         dbtns.addWidget(add_d); dbtns.addWidget(edit_d); dbtns.addWidget(rm_d); dbtns.addStretch(1)
         dl.addLayout(dbtns)
+        for b, n in ((add_d, "plus"), (edit_d, "edit"), (rm_d, "trash")):
+            icons.bind_icon(b, n)
         tabs.addTab(dest_w, "Destinations")
 
         # --- Exclusions tab ---
@@ -519,12 +553,19 @@ class ProfileEditor(QtWidgets.QDialog):
     def _add_source_folder(self) -> None:
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Pick a folder to back up")
         if d:
-            self.sources_list.addItem(d)
+            self._add_source(d)
 
     def _add_source_file(self) -> None:
         f, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Pick a file to back up")
         if f:
-            self.sources_list.addItem(f)
+            self._add_source(f)
+
+    def _add_source(self, path: str) -> None:
+        path = os.path.normpath(path)
+        existing = {os.path.normcase(self.sources_list.item(i).text())
+                    for i in range(self.sources_list.count())}
+        if os.path.normcase(path) not in existing:
+            self.sources_list.addItem(path)
 
     def _remove_source(self) -> None:
         for it in self.sources_list.selectedItems():
@@ -675,16 +716,9 @@ class ProfileEditor(QtWidgets.QDialog):
     def _accept(self) -> None:
         name = self.name_edit.text().strip() or "Unnamed"
         sources = [self.sources_list.item(i).text() for i in range(self.sources_list.count())]
-        file_globs, dir_names = self._collect_exclusions()
-        self.profile.name = name
-        self.profile.sources = sources
-        self.profile.destinations = list(self._destinations)
-        self.profile.exclude_globs = file_globs
-        self.profile.exclude_dirs = dir_names
-        self.profile.verify_with_hash = self.verify_hash.isChecked()
-        self.profile.mirror_deletions = self.mirror_del.isChecked()
-        self.profile.mirror_max_delete_pct = int(self.mirror_cap.value())
-        self.profile.keep_versions = int(self.keep_versions.value())
+        # Validate BEFORE touching self.profile: the dialog edits the live
+        # profile object, so a refused save used to leave it half-modified
+        # even after the user then pressed Cancel.
         # Guard: flat layout + multiple sources is invalid. Warn and refuse
         # to save until the user resolves it.
         if self.flat_layout.isChecked() and len(sources) > 1:
@@ -696,6 +730,16 @@ class ProfileEditor(QtWidgets.QDialog):
                 "Either uncheck that option or reduce the Sources list to one.",
             )
             return
+        file_globs, dir_names = self._collect_exclusions()
+        self.profile.name = name
+        self.profile.sources = sources
+        self.profile.destinations = list(self._destinations)
+        self.profile.exclude_globs = file_globs
+        self.profile.exclude_dirs = dir_names
+        self.profile.verify_with_hash = self.verify_hash.isChecked()
+        self.profile.mirror_deletions = self.mirror_del.isChecked()
+        self.profile.mirror_max_delete_pct = int(self.mirror_cap.value())
+        self.profile.keep_versions = int(self.keep_versions.value())
         self.profile.flat_destination_layout = self.flat_layout.isChecked()
         self.profile.verify_after_copy = self.verify_after.isChecked()
         self.profile.confirm_before_copy = self.confirm_copy.isChecked()

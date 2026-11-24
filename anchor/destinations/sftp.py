@@ -9,6 +9,7 @@ Credentials: prefer Windows Credential Manager via `keyring` (service name
 from __future__ import annotations
 
 import io
+import logging
 import os
 import posixpath
 import re
@@ -16,7 +17,10 @@ import stat as _stat
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from .base import Destination, DestinationError, FileVersion, RemoteStat, VERSIONS_PREFIX
+from .base import (
+    Destination, DestinationError, FileVersion, RemoteStat, VERSIONS_PREFIX,
+    check_rel_path, is_safe_name,
+)
 
 
 _VERSION_SUFFIX_RE = re.compile(r"__(\d{8}T\d{6})\.bak$")
@@ -31,6 +35,45 @@ try:
     import keyring  # type: ignore
 except Exception:
     keyring = None  # type: ignore
+
+log = logging.getLogger("anchor.sftp")
+
+
+def _known_hosts_path() -> str:
+    from ..app_config import APP_DIR, ensure_dirs
+    ensure_dirs()
+    return str(APP_DIR / "known_hosts")
+
+
+def _fingerprint(key) -> str:
+    import base64
+    import hashlib
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+if paramiko is not None:
+    class _TrustOnFirstUsePolicy(paramiko.MissingHostKeyPolicy):
+        """Accept and remember a host key the first time we see a host.
+
+        The key is saved to Anchor's own known_hosts file. On later connects
+        paramiko compares against it and raises BadHostKeyException if the
+        server presents a different key (possible man-in-the-middle).
+        """
+
+        def __init__(self, path: str):
+            self.path = path
+
+        def missing_host_key(self, client, hostname, key):
+            client.get_host_keys().add(hostname, key.get_name(), key)
+            try:
+                client.save_host_keys(self.path)
+            except OSError as e:
+                log.warning("Could not save SFTP host key to %s: %s", self.path, e)
+            log.warning(
+                "SFTP: trusting new host key for %s (%s %s) on first use",
+                hostname, key.get_name(), _fingerprint(key),
+            )
 
 
 class SFTPDestination(Destination):
@@ -62,7 +105,7 @@ class SFTPDestination(Destination):
     # --- helpers ----------------------------------------------------------
 
     def _abs(self, rel_path: str) -> str:
-        rel = rel_path.replace("\\", "/").lstrip("/")
+        rel = check_rel_path(rel_path)
         return posixpath.join(self.remote_root, rel) if rel else self.remote_root
 
     def _get_password(self) -> str:
@@ -85,7 +128,12 @@ class SFTPDestination(Destination):
     def connect(self) -> None:
         try:
             self._client = paramiko.SSHClient()
-            self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # Trust-on-first-use with a stored fingerprint; a changed key is a
+            # hard failure (BadHostKeyException below) instead of AutoAdd.
+            kh = _known_hosts_path()
+            if os.path.exists(kh):
+                self._client.load_host_keys(kh)
+            self._client.set_missing_host_key_policy(_TrustOnFirstUsePolicy(kh))
             self._client.connect(
                 hostname=self.host,
                 port=self.port,
@@ -99,7 +147,16 @@ class SFTPDestination(Destination):
             self._mkdir_recursive(self.remote_root)
         except DestinationError:
             raise
+        except paramiko.BadHostKeyException as e:
+            self.close()
+            raise DestinationError(
+                f"SFTP host key for {self.host} has CHANGED (got "
+                f"{_fingerprint(e.key)}). This may be a man-in-the-middle "
+                f"attack. If the server was legitimately reinstalled, remove "
+                f"its entry from {_known_hosts_path()} and reconnect."
+            ) from e
         except Exception as e:
+            self.close()
             raise DestinationError(f"SFTP connect failed: {e}") from e
 
     def close(self) -> None:
@@ -222,7 +279,9 @@ class SFTPDestination(Destination):
                 return
             for a in entries:
                 name = a.filename
-                if name in (".", ".."):
+                if not is_safe_name(name):
+                    if name not in (".", ".."):
+                        log.warning("SFTP: ignoring unsafe remote name %r", name)
                     continue
                 if path == self.remote_root and name == VERSIONS_PREFIX:
                     continue  # skip archive subtree
@@ -278,7 +337,7 @@ class SFTPDestination(Destination):
         out: List[FileVersion] = []
         for a in entries:
             name = a.filename
-            if not name.startswith(base + "__"):
+            if not is_safe_name(name) or not name.startswith(base + "__"):
                 continue
             m = _VERSION_SUFFIX_RE.search(name)
             if not m:

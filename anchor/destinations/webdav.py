@@ -1,13 +1,19 @@
 """WebDAV destination (e.g., QNAP via WebDAV)."""
 from __future__ import annotations
 
+import logging
 import os
 import posixpath
 import re
 from datetime import datetime
 from typing import Iterable, List, Optional
 
-from .base import Destination, DestinationError, FileVersion, RemoteStat, VERSIONS_PREFIX
+from .base import (
+    Destination, DestinationError, FileVersion, RemoteStat, VERSIONS_PREFIX,
+    check_rel_path, is_safe_name,
+)
+
+log = logging.getLogger("anchor.webdav")
 
 
 _VERSION_SUFFIX_RE = re.compile(r"__(\d{8}T\d{6})\.bak$")
@@ -68,10 +74,21 @@ class WebDAVDestination(Destination):
         raise DestinationError("No WebDAV password set for this destination.")
 
     def _abs(self, rel_path: str) -> str:
-        rel = rel_path.replace("\\", "/").lstrip("/")
+        rel = check_rel_path(rel_path)
         return posixpath.join(self.remote_root, rel) if rel else self.remote_root
 
     def connect(self) -> None:
+        if self._url.startswith("http://"):
+            log.warning(
+                "WebDAV destination %s uses plain HTTP: the password and all "
+                "backed-up data travel unencrypted. Enable HTTPS.", self._url,
+            )
+        elif not self.verify_tls:
+            log.warning(
+                "WebDAV destination %s has TLS certificate verification "
+                "disabled: a man-in-the-middle could capture the password.",
+                self._url,
+            )
         try:
             self._client = Client({
                 "webdav_hostname": self._url,
@@ -165,10 +182,15 @@ class WebDAVDestination(Destination):
             raise DestinationError(f"WebDAV upload failed for {rel_path}: {e}") from e
 
     def remove(self, rel_path: str) -> None:
+        path = self._abs(rel_path)
         try:
-            self._client.clean(self._abs(rel_path))
-        except Exception:
+            self._client.clean(path)
+        except RemoteResourceNotFound:
             pass
+        except Exception as e:
+            # Surface the failure so mirror-delete doesn't drop the state row
+            # for a file that is still on the server.
+            raise DestinationError(f"WebDAV remove failed for {rel_path}: {e}") from e
 
     # --- Read API --------------------------------------------------------
 
@@ -197,6 +219,9 @@ class WebDAVDestination(Destination):
             for name in entries:
                 clean = name.rstrip("/")
                 if not clean or clean == posixpath.basename(path.rstrip("/")):
+                    continue
+                if not is_safe_name(clean):
+                    log.warning("WebDAV: ignoring unsafe remote name %r", clean)
                     continue
                 child = posixpath.join(path, clean)
                 if path == self.remote_root and clean == VERSIONS_PREFIX:
@@ -259,7 +284,7 @@ class WebDAVDestination(Destination):
         out: List[FileVersion] = []
         for raw in entries:
             name = raw.rstrip("/")
-            if not name.startswith(base + "__"):
+            if not is_safe_name(name) or not name.startswith(base + "__"):
                 continue
             m = _VERSION_SUFFIX_RE.search(name)
             if not m:

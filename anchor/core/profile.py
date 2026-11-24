@@ -8,14 +8,15 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..app_config import PROFILES_DIR, ensure_dirs
+from .. import app_config
+from ..app_config import atomic_write_text, coerce_fields, ensure_dirs, is_safe_id
 
 
 # --- Destination config ------------------------------------------------------
 
 @dataclass
 class DestinationConfig:
-    """A destination for a backup.
+    r"""A destination for a backup.
 
     kind:
         "local"   – any path: local drive, USB, UNC (\\NAS\share), OneDrive folder
@@ -126,11 +127,23 @@ class BackupProfile:
 
     @classmethod
     def from_dict(cls, d: Dict) -> "BackupProfile":
-        d = dict(d)
-        d["destinations"] = [DestinationConfig(**x) for x in d.get("destinations", [])]
-        # filter unknown keys gracefully
-        allowed = set(cls.__dataclass_fields__.keys())
-        return cls(**{k: v for k, v in d.items() if k in allowed})
+        # Filter unknown keys and wrongly-typed values gracefully (the
+        # field default is used instead).
+        dests = d.get("destinations", [])
+        kw = coerce_fields(cls, d)
+        kw["destinations"] = [
+            DestinationConfig(**coerce_fields(DestinationConfig, x))
+            for x in (dests if isinstance(dests, list) else [])
+            if isinstance(x, dict)
+        ]
+        prof = cls(**kw)
+        # The id becomes part of file names and the schtasks command line.
+        if not is_safe_id(prof.id):
+            raise ValueError(f"Unsafe profile id: {prof.id!r}")
+        for dc in prof.destinations:
+            if not is_safe_id(dc.id):
+                raise ValueError(f"Unsafe destination id: {dc.id!r}")
+        return prof
 
 
 # --- Persistence -------------------------------------------------------------
@@ -138,22 +151,31 @@ class BackupProfile:
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+def _check_id(profile: BackupProfile) -> None:
+    if not is_safe_id(profile.id):
+        raise ValueError(f"Unsafe profile id: {profile.id!r}")
+
+
 def _file_for(profile: BackupProfile) -> Path:
     ensure_dirs()
+    _check_id(profile)
     safe = _SAFE_NAME_RE.sub("_", profile.name).strip("_") or "profile"
-    return PROFILES_DIR / f"{safe}__{profile.id}.json"
+    return app_config.PROFILES_DIR / f"{safe}__{profile.id}.json"
 
 
 def save_profile(profile: BackupProfile) -> Path:
     ensure_dirs()
-    # Remove old files for this profile id (in case name changed)
-    for p in PROFILES_DIR.glob(f"*__{profile.id}.json"):
+    path = _file_for(profile)
+    # Write the new file first (atomically), then remove stale files for this
+    # id (in case the name changed) — so a crash never loses the profile.
+    atomic_write_text(path, json.dumps(profile.to_dict(), indent=2))
+    for p in app_config.PROFILES_DIR.glob(f"*__{profile.id}.json"):
+        if p == path:
+            continue
         try:
             p.unlink()
         except OSError:
             pass
-    path = _file_for(profile)
-    path.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
     return path
 
 
@@ -168,7 +190,7 @@ def load_profile(path: Path) -> Optional[BackupProfile]:
 def list_profiles() -> List[BackupProfile]:
     ensure_dirs()
     out: List[BackupProfile] = []
-    for p in sorted(PROFILES_DIR.glob("*.json")):
+    for p in sorted(app_config.PROFILES_DIR.glob("*.json")):
         prof = load_profile(p)
         if prof:
             out.append(prof)
@@ -190,7 +212,8 @@ def find_profile_by_name(name: str) -> Optional[BackupProfile]:
 
 
 def delete_profile(profile: BackupProfile) -> None:
-    for p in PROFILES_DIR.glob(f"*__{profile.id}.json"):
+    _check_id(profile)
+    for p in app_config.PROFILES_DIR.glob(f"*__{profile.id}.json"):
         try:
             p.unlink()
         except OSError:

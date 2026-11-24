@@ -1,139 +1,93 @@
 <p align="center">
-  <img src="assets/icon-256.png" width="128" alt="Anchor icon">
+  <img src="docs/images/logo.png" width="112" alt="Anchor">
 </p>
 
 <h1 align="center">Anchor</h1>
 
 <p align="center">
-  <em>A GUI-driven incremental backup tool for Windows 10 and 11.</em>
+  <em>Incremental backups for Windows 10 and 11 — set it up once, then forget it.</em>
 </p>
 
 <p align="center">
+  <a href="https://github.com/Hans-Tandt/Anchor/actions/workflows/ci.yml"><img src="https://github.com/Hans-Tandt/Anchor/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Hans-Tandt/Anchor/releases/latest"><img src="https://img.shields.io/github/v/release/Hans-Tandt/Anchor" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Hans-Tandt/Anchor" alt="License: MIT"></a>
-  <a href="https://hanstandt.be/projects/anchor/"><img src="https://img.shields.io/badge/version-1.4.4-blue" alt="Version 1.4.4"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue" alt="Windows 10 / 11">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
 </p>
 
----
+<p align="center">
+  <img src="docs/images/demo-backup.gif" width="860" alt="Running a backup in Anchor">
+</p>
 
-## What it does
-
-Anchor makes an incremental copy of the folders you choose to any place you can write to — a USB drive, a network share, your OneDrive folder, or a remote NAS over SFTP or WebDAV. It only copies what has actually changed since the last run, keeps optional older versions of each file so a bad edit can be rolled back, and confirms after every run that everything you wanted is really at the destination.
-
-Set it up once, schedule it, and forget it. Or run it by hand from a friendly GUI.
+Anchor copies the folders you choose to a USB drive, a network share, OneDrive, or a NAS over
+SFTP / WebDAV. It only copies what changed, can keep older versions of every file, and checks
+after each run that everything really arrived.
 
 ## Features
 
-| Area | What you get |
-|---|---|
-| **Destinations** | Local drives, USB, UNC network shares, OneDrive folders (any local path really), SFTP, WebDAV |
-| **Incremental** | Detects changes by size + modification time (fast) or SHA-256 hash (paranoid) |
-| **Safe writes** | Every file is written to a `.tmp` sibling then atomically renamed; local writes also `fsync` before rename |
-| **Versioning** | Keep up to N previous versions of each file under `_anchor_versions/` — protects against ransomware and bad edits |
-| **Restore UI** | Browse the destination tree, pick a file and a version, restore to the original location or an alternate folder |
-| **Post-copy verify** | After copy, Anchor re-walks your source and checks every file is at the destination with the right size — proves the backup actually worked |
-| **Mirror-delete** | Optionally delete files at the destination that vanished from the source, with a safety cap that refuses to remove more than X% of known files in one run |
-| **Group runs** | Ctrl-click multiple profiles, click "Run selected", they run one after another |
-| **Multi-destination** | One profile can back up to several destinations at once |
-| **Scheduling** | Native Windows Task Scheduler integration — daily, weekly, on sign-in |
-| **Credentials** | Remote passwords stored in Windows Credential Manager, never on disk in plain text |
-| **Long paths** | Automatically uses `\\?\` prefix so files past 260 characters don't silently fail |
-| **Parallel** | Local copies use a configurable thread pool; remote copies stay serial (one channel) |
-| **Diagnostic tool** | `diagnose.py` prints paths, state, and can explain what the engine would do for any single file |
+- **Incremental**: size + date (fast) or SHA-256 (thorough) change detection.
+- **Safe writes**: every file goes to a temp file first and is then renamed into place.
+- **Versioning**: keep the last *N* versions of each file, so a bad edit or ransomware can be undone.
+- **Verify**: after copying, Anchor checks that every file is at the destination at the right size.
+- **Restore**: browse a backup, pick a file and a version, and restore it to its original or another folder.
+- **Mirror deletions** with a safety cap, so a missing drive never wipes your backup.
+- **Schedules** through Windows Task Scheduler, **group runs**, **auto-run when a drive is plugged in**.
+- **Secure remotes**: passwords live in Windows Credential Manager, SFTP host keys are pinned on first use, and TLS is verified.
+- **Fluent UI** with dark, light or system theme, desktop notifications and a live activity log.
 
-## Download
+<p align="center">
+  <img src="docs/images/screenshot-dashboard-light.png" width="49%" alt="Backups page, light theme">
+  <img src="docs/images/screenshot-settings-dark.png" width="49%" alt="Settings page, dark theme">
+</p>
 
-The latest version (1.4.4), with its SHA-256 checksum, is on the project page:
-<https://hanstandt.be/projects/anchor/>, and under Releases on GitHub.
+More screenshots and a tour: **[docs/screenshots.md](docs/screenshots.md)**.
 
-**Coming from 1.2.0?** That version skipped `.git` folders by default, so the history of Git
-repositories was not backed up. Open each profile, go to **Edit > Exclusions** and remove the `.git`
-line; the next run copies the missing history once.
+## Install
 
-Because the download is not code-signed, Windows SmartScreen will show a blue warning when you first run it. Click **More info** → **Run anyway**. If that makes you uncomfortable, run from source instead (see below).
+**Download** the latest `Anchor-x.y.z-win64.zip` and its `.sha256` from
+[Releases](https://github.com/Hans-Tandt/Anchor/releases/latest) (also on the
+[project page](https://hanstandt.be/projects/anchor/)). Unzip and run `Anchor.exe`. The build is not
+code-signed, so SmartScreen will ask once: **More info → Run anyway**.
 
-## Run from source
-
-Anchor needs Python 3.10 or newer.
-
-1. Install Python from <https://www.python.org/downloads/windows/> (tick *Add Python to PATH* during install).
-2. Clone or download this repo, then open a terminal in the folder.
-3. Install the dependencies:
-   ```bat
-   install.bat
-   ```
-   Or the manual equivalent:
-   ```bat
-   python -m pip install -r requirements.txt
-   ```
-4. Launch the GUI:
-   ```bat
-   run.bat
-   ```
-   Or:
-   ```bat
-   python -m anchor
-   ```
-
-That's it. Create a profile from the GUI, add sources and a destination, and click **Run backup now**.
-
-## Build the .exe
-
-Anchor ships a `build.bat` that produces a standalone Windows build via PyInstaller. From the project root:
+**Or run from source** (Python 3.10+):
 
 ```bat
-build.bat
+git clone https://github.com/Hans-Tandt/Anchor.git
+cd Anchor
+install.bat
+run.bat
 ```
 
-The first run auto-installs PyInstaller (~50 MB) if it isn't present. Subsequent builds skip that step.
+`install.bat` runs `pip install -r requirements.txt`; `run.bat` starts `python -m anchor`.
 
-Output layout:
+## Documentation
 
-```
-dist\Anchor\
-├── Anchor.exe          <-- launch this
-└── _internal\          <-- Qt libraries, Python runtime, bundled data
-                            (must stay next to Anchor.exe)
-```
-
-To share the build, zip the whole `dist\Anchor\` folder. The exe on its own won't run — it needs `_internal\` beside it.
-
-The bundled exe also acts as the CLI dispatcher for scheduled backups: `Anchor.exe --cli --profile <id> --silent`. Anchor's scheduler auto-detects the frozen build and writes tasks against the exe instead of `python -m anchor.cli`.
-
-A future release will wrap this into a signed Inno Setup installer. For now, the zip works fine on any Windows 10/11 machine without Python installed.
-
-## Project structure
-
-| Path | What lives there |
+| | |
 |---|---|
-| `anchor/` | The Python package (engine, destinations, GUI, CLI) |
-| `anchor/core/` | Engine, walker, state DB, run lock, backup profile model |
-| `anchor/destinations/` | Adapters: local, SFTP, WebDAV — all speak one `Destination` interface |
-| `anchor/gui/` | PySide6 dialogs and main window |
-| `anchor/TechEase/` | Bundled brand assets (sidebar footer) |
-| `assets/` | App icon (`icon.ico`) and PNG previews |
-| `scripts/` | Build-time tools (currently: `make_icon.py`) |
-| `logs/` | Rotating monthly log files, created on first run |
-| `diagnose.py` | Standalone diagnostic tool |
-| `install.bat` / `run.bat` | Windows launchers |
+| [User guide](docs/user-guide.md) | Profiles, destinations, schedules, restore, settings |
+| [Security](docs/security.md) | Credentials, SFTP host keys, TLS, what Anchor stores where |
+| [Architecture](docs/architecture.md) | How the engine, destinations and GUI fit together |
+| [Development](docs/development.md) | Tests, building the exe, CI/CD and releases, regenerating images |
+| [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) | |
 
-Runtime user data (profiles, state DBs, credentials) lives under `%APPDATA%\Anchor\` — Anchor never writes those into the repo folder.
+## Project layout
 
-## Contributing
+```
+anchor/            the application package
+  core/            engine, walker, state DB, run lock, profile model
+  destinations/    local / SFTP / WebDAV adapters behind one interface
+  gui/             PySide6 UI (pages/, Fluent widget kit, dialogs)
+  resources/       app icon and brand logo bundled into the exe
+  cli.py           headless runner used by scheduled tasks
+  diagnose.py      python -m anchor.diagnose
+docs/              documentation, screenshots, GIFs
+packaging/         PyInstaller spec
+scripts/           build.bat, icon / brand / demo generators
+tests/             pytest suite (headless)
+.github/           CI, release workflow, issue templates
+```
 
-Bug reports, feature ideas, and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first — it's short.
+## License
 
-Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## Security
-
-Found a security issue? Please **do not** open a public issue. See [SECURITY.md](SECURITY.md) for how to report it privately.
-
-## Licence
-
-[MIT](LICENSE) — © 2026 Hans-Tandt.
-
-## Author
-
-**Hans-Tandt** — [GitHub profile](https://github.com/Hans-Tandt)
+[MIT](LICENSE) © Hans Tandt. Created by Hans Tandt · TechEase.

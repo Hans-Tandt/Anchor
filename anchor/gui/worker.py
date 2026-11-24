@@ -4,92 +4,101 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from PySide6 import QtCore
 
 from ..core.engine import BackupEngine, BackupProgress, BackupResult, Verifier, VerifyResult
-from ..core.profile import BackupProfile, save_profile
+from ..core.profile import BackupProfile, find_profile_by_id, save_profile
+
+log = logging.getLogger("anchor.gui.worker")
+
+
+def _persist_run_summary(profile: BackupProfile, result: BackupResult) -> None:
+    """Write last-run fields back to the profile file.
+
+    Re-reads the profile from disk first so edits saved elsewhere while the
+    run was going (e.g. the CLI or another window) are not overwritten by the
+    snapshot the run started with. The in-memory object is updated too so the
+    GUI shows the new status without reloading.
+    """
+    stamp = datetime.now().isoformat(timespec="seconds")
+    fresh = find_profile_by_id(profile.id)
+    for target in (profile, fresh):
+        if target is None:
+            continue
+        target.last_run_iso = stamp
+        target.last_status = result.status
+        target.last_files_copied = result.files_copied
+        target.last_bytes_copied = result.bytes_copied
+    if fresh is None:
+        return  # profile was deleted meanwhile — don't resurrect it
+    try:
+        save_profile(fresh)
+    except Exception:
+        log.exception("Could not save run summary for profile '%s'", profile.name)
 
 
 class BackupWorker(QtCore.QThread):
-    progress = QtCore.Signal(object)  # BackupProgress
-    finished_ok = QtCore.Signal(object)  # BackupResult
+    progress = QtCore.Signal(object)       # BackupProgress
+    finished_ok = QtCore.Signal(object)    # BackupResult
     finished_err = QtCore.Signal(str)
-    log_line = QtCore.Signal(str, str)  # (level, message) — wired by log handler
 
     def __init__(self, profile: BackupProfile, parent=None):
         super().__init__(parent)
         self.profile = profile
         self._cancel = threading.Event()
-        # Set by the GUI when the user clicks the "Start copy" confirm button.
-        # Only observed by the engine when `profile.confirm_before_copy` is on;
-        # otherwise the engine ignores it and uses the time-based pause.
+        # Set when the user clicks "Start copy". Only observed by the engine
+        # when profile.confirm_before_copy is on.
         self._confirm = threading.Event()
 
     def request_cancel(self) -> None:
         self._cancel.set()
-        # Unblock the scan-done wait so cancel kills the run promptly.
-        self._confirm.set()
+        self._confirm.set()  # unblock a scan-done wait so cancel is prompt
 
     def is_cancelling(self) -> bool:
         return self._cancel.is_set()
 
     def confirm_start_copy(self) -> None:
-        """Called from the GUI when the user clicks 'Start copy' after scan."""
         self._confirm.set()
 
     def run(self) -> None:  # noqa: D401
         try:
             engine = BackupEngine(
                 self.profile,
-                on_event=self._on_progress,
+                on_event=self.progress.emit,
                 cancel_event=self._cancel,
                 confirm_event=self._confirm,
             )
             result: BackupResult = engine.run()
-            # Persist run summary on profile
-            self.profile.last_run_iso = datetime.now().isoformat(timespec="seconds")
-            self.profile.last_status = result.status
-            self.profile.last_files_copied = result.files_copied
-            self.profile.last_bytes_copied = result.bytes_copied
-            try:
-                save_profile(self.profile)
-            except Exception:
-                pass
+            _persist_run_summary(self.profile, result)
             self.finished_ok.emit(result)
         except Exception as e:
-            self.finished_err.emit(str(e))
-
-    def _on_progress(self, p: BackupProgress) -> None:
-        # Cross-thread emit — Qt queues the signal automatically.
-        self.progress.emit(p)
+            log.exception("Backup of '%s' crashed", self.profile.name)
+            self.finished_err.emit(str(e) or e.__class__.__name__)
 
 
 class BackupGroupWorker(QtCore.QThread):
-    """Run a list of profiles sequentially, one after another.
+    """Run several profiles one after another.
 
-    Emits the same `progress` events as a single BackupWorker, but augments
-    each with `dest_label = "[i/N] <profile-name>" ...` so the GUI shows
-    "currently running profile 2 of 5". On finish, emits a single aggregated
-    GroupResult.
+    Progress events get "[i/N] <profile>" prefixed to dest_label. A profile
+    that crashes is recorded as an error and the group carries on with the
+    next one (previously one bad profile aborted the whole group and threw
+    away the results of the profiles that had already finished).
     """
 
-    progress = QtCore.Signal(object)              # BackupProgress
-    finished_ok = QtCore.Signal(list)             # List[BackupResult]
+    progress = QtCore.Signal(object)          # BackupProgress
+    finished_ok = QtCore.Signal(list)         # List[BackupResult]
     finished_err = QtCore.Signal(str)
-    # Fired once per profile completion so the GUI can refresh the sidebar
-    # entry (status dot, last_run, etc.) without waiting for the whole group.
-    one_profile_done = QtCore.Signal(object)      # BackupResult
+    one_profile_done = QtCore.Signal(object)  # BackupResult
+    profile_started = QtCore.Signal(str)      # profile id
 
     def __init__(self, profiles: List[BackupProfile], parent=None):
         super().__init__(parent)
         self.profiles = list(profiles)
         self._cancel = threading.Event()
-        # Shared confirm event, reset between profiles. Only profiles with
-        # `confirm_before_copy` set will actually use it.
         self._confirm = threading.Event()
-        self._log = logging.getLogger("anchor.group")
+        self.current_profile_id = ""
 
     def request_cancel(self) -> None:
         self._cancel.set()
@@ -107,14 +116,11 @@ class BackupGroupWorker(QtCore.QThread):
         for i, profile in enumerate(self.profiles, start=1):
             if self._cancel.is_set():
                 break
-            # Reset the confirm event for this profile — each profile that
-            # wants a confirm gets its own fresh wait.
             self._confirm.clear()
-            # A clear header in the GUI log so the user can tell where one
-            # profile's output ends and the next begins.
-            self._log.info(
-                "── Group run %d/%d: profile '%s' ──", i, total, profile.name,
-            )
+            self.current_profile_id = profile.id
+            self.profile_started.emit(profile.id)
+            log.info("── Group run %d/%d: profile '%s' ──", i, total, profile.name)
+            started = datetime.now()
             try:
                 engine = BackupEngine(
                     profile,
@@ -123,42 +129,28 @@ class BackupGroupWorker(QtCore.QThread):
                     confirm_event=self._confirm,
                 )
                 result = engine.run()
-                # Persist last-run summary on the profile
-                profile.last_run_iso = datetime.now().isoformat(timespec="seconds")
-                profile.last_status = result.status
-                profile.last_files_copied = result.files_copied
-                profile.last_bytes_copied = result.bytes_copied
-                try:
-                    save_profile(profile)
-                except Exception:
-                    pass
-                results.append(result)
-                self.one_profile_done.emit(result)
             except Exception as e:
-                self._log.exception("Group run aborted on '%s'", profile.name)
-                self.finished_err.emit(f"{profile.name}: {e}")
-                return
+                log.exception("Group run: profile '%s' crashed", profile.name)
+                result = BackupResult(
+                    profile_id=profile.id, started_at=started, ended_at=datetime.now(),
+                    errors=[f"{profile.name}: {e}"], destinations_failed=1,
+                )
+            _persist_run_summary(profile, result)
+            results.append(result)
+            self.one_profile_done.emit(result)
         self.finished_ok.emit(results)
 
     def _make_progress_emitter(self, i: int, total: int, name: str):
-        """Wrap each profile's progress so dest_label includes 'i/N name'."""
         def _emit(p: BackupProgress) -> None:
-            # Safe to change the label: each event is a fresh snapshot made by
-            # BackupEngine._emit, not the engine's live progress object.
+            # Each event is a fresh snapshot (BackupEngine._emit), safe to edit.
             p.dest_label = f"[{i}/{total}] {name}  •  {p.dest_label}"
             self.progress.emit(p)
         return _emit
 
 
 class VerifyWorker(QtCore.QThread):
-    """Runs Verifier.run() off the UI thread.
-
-    Emits the same BackupProgress shape as BackupWorker so the main window's
-    progress widgets can be reused without modification.
-    """
-
-    progress = QtCore.Signal(object)            # BackupProgress
-    finished_ok = QtCore.Signal(object)         # VerifyResult
+    progress = QtCore.Signal(object)       # BackupProgress
+    finished_ok = QtCore.Signal(object)    # VerifyResult
     finished_err = QtCore.Signal(str)
 
     def __init__(self, profile: BackupProfile, parent=None):
@@ -169,14 +161,17 @@ class VerifyWorker(QtCore.QThread):
     def request_cancel(self) -> None:
         self._cancel.set()
 
+    def is_cancelling(self) -> bool:
+        return self._cancel.is_set()
+
+    def confirm_start_copy(self) -> None:
+        pass
+
     def run(self) -> None:  # noqa: D401
         try:
-            v = Verifier(
-                self.profile,
-                on_event=lambda p: self.progress.emit(p),
-                cancel_event=self._cancel,
-            )
+            v = Verifier(self.profile, on_event=self.progress.emit, cancel_event=self._cancel)
             result: VerifyResult = v.run()
             self.finished_ok.emit(result)
         except Exception as e:
-            self.finished_err.emit(str(e))
+            log.exception("Verify of '%s' crashed", self.profile.name)
+            self.finished_err.emit(str(e) or e.__class__.__name__)

@@ -1,0 +1,82 @@
+name: Release
+
+# Push a tag like v1.5.0 (matching anchor/__init__.py's __version__) to build
+# the Windows zip, compute its SHA-256 and publish a GitHub Release whose notes
+# are the matching CHANGELOG.md section.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.5.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Check tag matches __version__
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path anchor/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne $env:TAG) { throw "Tag $env:TAG does not match __version__ $v" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Build
+        run: python -m PyInstaller --noconfirm packaging/Anchor.spec
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "Anchor-${{ steps.ver.outputs.version }}-win64.zip"
+          Compress-Archive -Path dist\Anchor -DestinationPath $name
+          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii "$name.sha256"
+          "ZIP=$name" >> $env:GITHUB_ENV
+
+      - name: Extract release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[?$([regex]::Escape($v))\]?" | Select-Object -First 1).LineNumber
+          if (-not $start) { "See CHANGELOG.md" | Out-File notes.md; exit 0 }
+          $rest = $lines[$start..($lines.Length - 1)]
+          $end = ($rest | Select-String -Pattern '^## ' | Select-Object -First 1).LineNumber
+          if ($end) { $rest = $rest[0..($end - 2)] }
+          $rest | Out-File -Encoding utf8 notes.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Anchor ${{ steps.ver.outputs.version }}
+          body_path: notes.md
+          files: |
+            ${{ env.ZIP }}
+            ${{ env.ZIP }}.sha256

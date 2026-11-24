@@ -87,9 +87,14 @@ class BackupResult:
     # examined. status() is downgraded to "error" if there are any issues.
     verify_checked: int = 0
     verify_issues: List[str] = field(default_factory=list)
+    # Destinations that could not be opened/connected at all. Any such
+    # failure makes the run an error even though no per-file failure exists.
+    destinations_failed: int = 0
 
     @property
     def status(self) -> str:
+        if self.destinations_failed:
+            return "error"
         if self.files_failed or self.verify_issues:
             return "error" if (self.files_failed + len(self.verify_issues)) > max(1, self.files_copied // 20) else "warning"
         return "ok"
@@ -169,6 +174,8 @@ class BackupEngine:
                 errors=[str(e)],
                 files_failed=1,
             )
+        finally:
+            self._state.close()
 
     def _run_locked(self) -> BackupResult:
         started = datetime.now()
@@ -240,6 +247,7 @@ class BackupEngine:
             if not os.path.exists(src):
                 log.warning("Source missing, skipped: %s", raw)
         files: List[Tuple[str, WalkItem]] = []
+        walk_errors: List[Tuple[str, str]] = []
         scan_bytes = 0
         # Emit "walking" progress as we go so the user sees activity. We don't
         # know the source's total upfront — the bar is indeterminate during
@@ -254,6 +262,7 @@ class BackupEngine:
             self.profile.sources, rules,
             follow_symlinks=self.profile.follow_symlinks,
             flat=self.profile.flat_destination_layout,
+            errors=walk_errors,
         ):
             if self.cancel_event.is_set():
                 break
@@ -265,7 +274,18 @@ class BackupEngine:
             self._emit(walk_progress)
         log.info("Scanned %d files (%.1f MB) across %d source(s)",
                  len(files), scan_bytes / (1024 * 1024), len(self.profile.sources))
-        self._live_subs = live_subs
+        # A source that was only partly readable (permission denied on a
+        # subfolder, locked file) must not drive mirror-delete: the files we
+        # couldn't see would otherwise be deleted from the backup.
+        partial_subs = {sub for sub, _msg in walk_errors}
+        for sub, msg in walk_errors[:20]:
+            log.warning("Could not read part of source (%s): %s", sub or "(flat)", msg)
+        if partial_subs & live_subs:
+            log.warning(
+                "Mirror-delete disabled this run for %d source(s) that could "
+                "not be read completely", len(partial_subs & live_subs),
+            )
+        self._live_subs = live_subs - partial_subs
 
         overall = BackupResult(profile_id=self.profile.id, started_at=started, ended_at=started)
         overall.files_scanned = len(files)
@@ -288,12 +308,14 @@ class BackupEngine:
             except DestinationError as e:
                 log.error("Cannot open destination '%s': %s", dest_label, e)
                 overall.errors.append(f"{dest_label}: {e}")
+                overall.destinations_failed += 1
                 continue
             try:
                 dest.connect()
             except DestinationError as e:
                 log.error("Cannot connect to '%s': %s", dest_label, e)
                 overall.errors.append(f"{dest_label}: {e}")
+                overall.destinations_failed += 1
                 continue
 
             try:
@@ -378,7 +400,13 @@ class BackupEngine:
             if self.cancel_event.is_set():
                 break
             observed.add((sub, item.rel_path))
-            need_copy, reason = self._needs_copy(dest, dest_id, sub, item, known)
+            try:
+                need_copy, reason = self._needs_copy(dest, dest_id, sub, item, known)
+            except OSError as e:
+                # e.g. hash-verify on a locked file. Don't abort the whole
+                # run: queue it for copy, where the failure is counted.
+                log.debug("Classify failed for %s: %s", item.abs_path, e)
+                need_copy, reason = True, "unreadable"
             if not need_copy:
                 with progress_lock:
                     result.files_skipped += 1
@@ -549,7 +577,11 @@ class BackupEngine:
         #      a larger fraction of known files than the cap allows, abort
         #      mirror-delete for this destination and log loudly. The user
         #      can re-enable by raising the cap if it really was intentional.
-        if self.profile.mirror_deletions and known:
+        # Never mirror-delete after a cancel: `observed` is then incomplete
+        # and every file not yet classified would look deleted.
+        if self.profile.mirror_deletions and self.cancel_event.is_set():
+            log.warning("Mirror-delete skipped on '%s': run was cancelled", dest_label)
+        elif self.profile.mirror_deletions and known:
             candidates = [
                 (sub, rel) for (sub, rel) in known.keys()
                 if (sub, rel) not in observed and sub in self._live_subs
@@ -809,6 +841,8 @@ class Verifier:
                 started_at=now, ended_at=now,
                 errors=[str(e)],
             )
+        finally:
+            self._state.close()
 
     def _run_locked(self) -> VerifyResult:
         started = datetime.now()

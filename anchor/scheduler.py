@@ -16,6 +16,28 @@ from typing import List, Optional
 
 TASK_PREFIX = "Anchor_"
 
+# Everything below ends up on the schtasks command line (and the id inside
+# the /TR command the task runs), so only plain tokens are accepted.
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_FREQUENCIES = ("DAILY", "WEEKLY", "ONCE", "ONLOGON")
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_DAYS_RE = re.compile(r"^(\*|(MON|TUE|WED|THU|FRI|SAT|SUN)(,(MON|TUE|WED|THU|FRI|SAT|SUN))*)$")
+
+
+def _check_id(profile_id: str) -> None:
+    if not isinstance(profile_id, str) or not _ID_RE.match(profile_id):
+        raise ValueError(f"Unsafe profile id: {profile_id!r}")
+
+
+def _spec_error(spec: "ScheduleSpec") -> Optional[str]:
+    if spec.frequency not in _FREQUENCIES:
+        return f"Invalid schedule frequency: {spec.frequency!r}"
+    if spec.start_time and not _TIME_RE.match(spec.start_time):
+        return f"Invalid start time (expected HH:MM): {spec.start_time!r}"
+    if spec.days and not _DAYS_RE.match(spec.days):
+        return f"Invalid weekly days: {spec.days!r}"
+    return None
+
 
 @dataclass
 class ScheduleSpec:
@@ -34,6 +56,7 @@ class ScheduleSpec:
 
 
 def _task_name(profile_id: str) -> str:
+    _check_id(profile_id)
     return f"{TASK_PREFIX}{profile_id}"
 
 
@@ -59,6 +82,7 @@ def _invocation_prefix() -> str:
 
 def task_command(profile_id: str) -> str:
     """Return the exact command a scheduled task should run for `profile_id`."""
+    _check_id(profile_id)
     return f"{_invocation_prefix()} --profile {profile_id} --silent"
 
 
@@ -67,8 +91,14 @@ def create_or_update(profile_id: str, spec: ScheduleSpec) -> Optional[str]:
     if os.name != "nt":
         return "Scheduling is only available on Windows."
 
-    name = _task_name(profile_id)
-    tr = task_command(profile_id)
+    try:
+        name = _task_name(profile_id)
+        tr = task_command(profile_id)
+    except ValueError as e:
+        return str(e)
+    err = _spec_error(spec)
+    if err:
+        return err
 
     cmd = [
         "schtasks", "/Create", "/F",
@@ -93,7 +123,10 @@ def create_or_update(profile_id: str, spec: ScheduleSpec) -> Optional[str]:
 def delete(profile_id: str) -> Optional[str]:
     if os.name != "nt":
         return None
-    name = _task_name(profile_id)
+    try:
+        name = _task_name(profile_id)
+    except ValueError as e:
+        return str(e)
     try:
         out = subprocess.run(
             ["schtasks", "/Delete", "/TN", name, "/F"],
@@ -110,7 +143,10 @@ def query(profile_id: str) -> Optional[str]:
     """Return the schtasks output for this profile, or None if missing."""
     if os.name != "nt":
         return None
-    name = _task_name(profile_id)
+    try:
+        name = _task_name(profile_id)
+    except ValueError:
+        return None
     try:
         out = subprocess.run(
             ["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"],
