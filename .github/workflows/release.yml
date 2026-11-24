@@ -1,12 +1,12 @@
 name: Release
 
-# Push a tag like v1.5.0 (matching anchor/__init__.py's __version__) to build
-# the Windows zip, compute its SHA-256 and publish a GitHub Release whose notes
-# are the matching CHANGELOG.md section.
+# Started by hand only (Actions tab > Release > Run workflow) for an existing
+# tag like v1.5.0 (matching anchor/__init__.py's __version__): builds the
+# Windows zip, computes its SHA-256 and publishes a GitHub Release whose notes
+# are the matching CHANGELOG.md section. Pushing a tag does not start it:
+# releases are normally built and published by hand.
 
 on:
-  push:
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       tag:

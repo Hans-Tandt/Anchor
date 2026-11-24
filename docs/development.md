@@ -37,14 +37,17 @@ reads the version from `anchor/__init__.py` and stamps it into the exe's file pr
 | Workflow | When | What |
 |---|---|---|
 | [`ci.yml`](../.github/workflows/ci.yml) | Every push to `main` and every PR | Ruff · pytest on Windows with Python 3.10–3.13 · PyInstaller build + start-up smoke test · build uploaded as an artifact (14 days) |
-| [`release.yml`](../.github/workflows/release.yml) | Pushing a tag `vX.Y.Z` | Checks the tag matches `__version__` · tests · build · `Anchor-X.Y.Z-win64.zip` + `.sha256` · GitHub Release with the CHANGELOG section as notes |
+| [`release.yml`](../.github/workflows/release.yml) | Started by hand (Actions tab → Release → Run workflow) for an existing tag `vX.Y.Z` | Checks the tag matches `__version__` · tests · build · `Anchor-X.Y.Z-win64.zip` + `.sha256` · GitHub Release with the CHANGELOG section as notes |
 | [`dependabot.yml`](../.github/dependabot.yml) | Monthly | Update PRs for pip packages and GitHub Actions |
 
 ### Cutting a release
 
 1. Bump `__version__` in `anchor/__init__.py`.
 2. Add a `## [X.Y.Z] — YYYY-MM-DD` section at the top of `CHANGELOG.md`.
-3. Commit, then `git tag vX.Y.Z && git push origin main vX.Y.Z`.
+3. Commit and push. Build with `scripts\build.bat` and publish the release by hand; pushing a tag
+   does not start a build.
+4. Optional: to let GitHub build it instead, create the tag `vX.Y.Z` and start **Release** by hand
+   in the Actions tab.
 
 ## Regenerating images
 
